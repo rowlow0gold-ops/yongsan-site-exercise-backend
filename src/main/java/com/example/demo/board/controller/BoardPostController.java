@@ -40,8 +40,12 @@ public class BoardPostController {
     }
 
     @DeleteMapping("/{id}")
-    public void delete(@PathVariable String boardKey, @PathVariable Long id) {
-        service.delete(boardKey, id);
+    public void delete(
+            @PathVariable String boardKey,
+            @PathVariable Long id,
+            @RequestBody(required = false) BoardPostWriteRequest req
+    ) {
+        service.delete(boardKey, id, req);
     }
 
     public record IdResponse(Long id) {}

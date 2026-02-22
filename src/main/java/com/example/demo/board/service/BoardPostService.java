@@ -11,11 +11,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+import com.example.demo.board.BoardKeys;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
 @Service
 @RequiredArgsConstructor
 public class BoardPostService {
 
     private final BoardPostRepository repository;
+    private final PasswordEncoder passwordEncoder;
 
     @Transactional(readOnly = true)
     public BoardPostListResponse list(String boardKey, int page, int size, String q) {
@@ -50,22 +54,60 @@ public class BoardPostService {
 
     @Transactional
     public Long create(String boardKey, BoardPostWriteRequest req) {
-        BoardPost saved = repository.save(new BoardPost(boardKey, req.getTitle(), req.getAuthor(), req.getContent()));
+
+        BoardPost post = new BoardPost(boardKey, req.getTitle(), req.getAuthor(), req.getContent());
+
+        // if praise board → require password
+        if (BoardKeys.PRAISE.equals(boardKey)) {
+
+            if (req.getPassword() == null || req.getPassword().length() < 6) {
+                throw new IllegalArgumentException("Password must be at least 6 characters.");
+            }
+
+            post.setPasswordHash(passwordEncoder.encode(req.getPassword()));
+        }
+
+        BoardPost saved = repository.save(post);
         return saved.getId();
     }
 
     @Transactional
     public void update(String boardKey, Long id, BoardPostWriteRequest req) {
+
         BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
                 .orElseThrow(() -> new EntityNotFoundException("post not found"));
+
+        if (BoardKeys.PRAISE.equals(boardKey)) {
+
+            if (req.getPassword() == null) {
+                throw new IllegalArgumentException("Password is required.");
+            }
+
+            if (!passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
+                throw new IllegalArgumentException("Wrong password.");
+            }
+        }
+
         p.update(req.getTitle(), req.getAuthor(), req.getContent());
-        // dirty checking -> auto update
     }
 
     @Transactional
-    public void delete(String boardKey, Long id) {
+    public void delete(String boardKey, Long id, BoardPostWriteRequest req) {
+
         BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
                 .orElseThrow(() -> new EntityNotFoundException("post not found"));
+
+        if (BoardKeys.PRAISE.equals(boardKey)) {
+
+            if (req.getPassword() == null) {
+                throw new IllegalArgumentException("Password is required.");
+            }
+
+            if (!passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
+                throw new IllegalArgumentException("Wrong password.");
+            }
+        }
+
         repository.delete(p);
     }
 }

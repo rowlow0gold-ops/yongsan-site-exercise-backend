@@ -2,6 +2,7 @@ package com.example.demo.board.entity;
 
 import jakarta.persistence.*;
 import lombok.Getter;
+import lombok.Setter;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
@@ -9,6 +10,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "board_posts")
 @Getter
+@Setter
 @NoArgsConstructor
 public class BoardPost {
 
@@ -60,4 +62,10 @@ public class BoardPost {
         this.author = author;
         this.content = content;
     }
+
+    @Column(name = "password_hash")
+    private String passwordHash;
+
+    @Column(name = "author_user_id")
+    private Long authorUserId;
 }
