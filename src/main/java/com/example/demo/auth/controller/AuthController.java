@@ -8,8 +8,10 @@ import com.example.demo.auth.repository.RefreshTokenRepository;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
@@ -23,6 +25,7 @@ import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
 
+
 @RestController
 @RequestMapping("/auth")
 public class AuthController {
@@ -30,15 +33,17 @@ public class AuthController {
     private final AppUserRepository users;
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
-    private final PasswordEncoder encoder = new BCryptPasswordEncoder();
 
     private final long refreshTtlSeconds;
     private final String refreshCookieName;
+
+    private final PasswordEncoder encoder;
 
     public AuthController(
             AppUserRepository users,
             RefreshTokenRepository refreshTokens,
             JwtUtil jwt,
+            PasswordEncoder encoder,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName
     ) {
@@ -47,20 +52,20 @@ public class AuthController {
         this.jwt = jwt;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.refreshCookieName = refreshCookieName;
+        this.encoder = encoder;
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody LoginReq req, HttpServletResponse res) {
-        AppUser u = users.findByEmail(req.getEmail())
-                .orElseThrow(() -> new RuntimeException("Invalid credentials"));
+    public ResponseEntity<?> login(@Valid @RequestBody LoginReq req, HttpServletResponse res) {
+        String email = req.getEmail().trim().toLowerCase();
 
-        if (!encoder.matches(req.getPassword(), u.getPasswordHash())) {
-            throw new RuntimeException("Invalid credentials");
+        AppUser u = users.findByEmail(email).orElse(null);
+        if (u == null || !encoder.matches(req.getPassword(), u.getPasswordHash())) {
+            return ResponseEntity.status(401).body(new Msg("Invalid credentials"));
         }
 
         String accessToken = jwt.createAccessToken(u.getId(), u.getRole());
 
-        // Create refresh token (raw token -> cookie, hash -> DB)
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
         String refreshHash = sha256Hex(rawRefresh);
 
@@ -78,14 +83,26 @@ public class AuthController {
         if (raw == null) return ResponseEntity.status(401).body(new Msg("No refresh cookie"));
 
         String hash = sha256Hex(raw);
+
         RefreshToken rt = refreshTokens.findTopByTokenHashAndRevokedAtIsNull(hash)
                 .orElse(null);
 
         if (rt == null) return ResponseEntity.status(401).body(new Msg("Invalid refresh"));
         if (rt.getExpiresAt().isBefore(LocalDateTime.now())) return ResponseEntity.status(401).body(new Msg("Refresh expired"));
 
-        AppUser u = users.findById(rt.getUserId())
-                .orElseThrow(() -> new RuntimeException("User not found"));
+        AppUser u = users.findById(rt.getUserId()).orElse(null);
+        if (u == null) return ResponseEntity.status(401).body(new Msg("Invalid refresh"));
+
+        // ✅ ROTATE refresh token: revoke old + issue new
+        rt.revokeNow();
+        refreshTokens.save(rt);
+
+        String newRawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
+        String newHash = sha256Hex(newRawRefresh);
+        LocalDateTime newExpiresAt = LocalDateTime.now().plusSeconds(refreshTtlSeconds);
+
+        refreshTokens.save(new RefreshToken(u.getId(), newHash, newExpiresAt));
+        setRefreshCookie(res, newRawRefresh, (int) refreshTtlSeconds);
 
         String newAccess = jwt.createAccessToken(u.getId(), u.getRole());
         return ResponseEntity.ok(new RefreshRes(newAccess));
@@ -114,22 +131,19 @@ public class AuthController {
     }
 
     private void setRefreshCookie(HttpServletResponse res, String value, int maxAgeSeconds) {
-        Cookie c = new Cookie(refreshCookieName, value);
-        c.setHttpOnly(true);
-        c.setSecure(false); // localhost. set true in production (HTTPS)
-        c.setPath("/");
-        c.setMaxAge(maxAgeSeconds);
-        // SameSite handling: Spring Cookie doesn't directly set it; for local dev usually ok.
-        res.addCookie(c);
+        // For local dev (http://localhost), SameSite=Lax usually works if same-site.
+        // If you deploy FE/BE on different domains, you’ll need SameSite=None; Secure (HTTPS).
+        String cookie = refreshCookieName + "=" + value
+                + "; Path=/"
+                + "; HttpOnly"
+                + "; Max-Age=" + maxAgeSeconds
+                + "; SameSite=Lax";
+        res.addHeader("Set-Cookie", cookie);
     }
 
     private void clearRefreshCookie(HttpServletResponse res) {
-        Cookie c = new Cookie(refreshCookieName, "");
-        c.setHttpOnly(true);
-        c.setSecure(false);
-        c.setPath("/");
-        c.setMaxAge(0);
-        res.addCookie(c);
+        String cookie = refreshCookieName + "=; Path=/; HttpOnly; Max-Age=0; SameSite=Lax";
+        res.addHeader("Set-Cookie", cookie);
     }
 
     private Optional<String> readCookie(HttpServletRequest req, String name) {
@@ -153,8 +167,11 @@ public class AuthController {
 
     @Data
     public static class LoginReq {
-        @Email @NotBlank private String email;
-        @NotBlank private String password;
+        @Email @NotBlank @Size(max = 255)
+        private String email;
+
+        @NotBlank @Size(max = 100)
+        private String password;
     }
 
     public record LoginRes(String accessToken, UserRes user) {}
@@ -166,7 +183,7 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    public ResponseEntity<?> signup(@RequestBody SignupReq req) {
+    public ResponseEntity<?> signup(@Valid @RequestBody SignupReq req) {
         String email = req.getEmail().trim().toLowerCase();
 
         if (users.findByEmail(email).isPresent()) {
@@ -185,8 +202,13 @@ public class AuthController {
 
     @Data
     public static class SignupReq {
-        @NotBlank private String name;
-        @Email @NotBlank private String email;
-        @NotBlank private String password;
+        @NotBlank @Size(max = 100)
+        private String name;
+
+        @Email @NotBlank @Size(max = 255)
+        private String email;
+
+        @NotBlank @Size(min = 8, max = 100)
+        private String password;
     }
 }
