@@ -7,15 +7,16 @@ import lombok.Getter;
 @Getter
 public class BoardPostWriteRequest {
 
-    @NotBlank
+    @NotBlank @Size(max = 200)
     private String title;
 
+    @Size(max = 100)
     private String author;
 
-    @NotBlank
+    @NotBlank @Size(max = 20000)
     private String content;
 
     // for praise board (guest)
-    @Size(min = 6, message = "Password must be at least 6 characters.")
+    @Size(min = 6, max = 100, message = "Password must be at least 6 characters.")
     private String password;
 }

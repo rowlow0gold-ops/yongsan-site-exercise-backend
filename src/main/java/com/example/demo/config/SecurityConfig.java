@@ -4,16 +4,28 @@ import com.example.demo.auth.jwt.JwtAuthFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.header.writers.ContentSecurityPolicyHeaderWriter;
+import org.springframework.security.web.header.writers.PermissionsPolicyHeaderWriter;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
 
 import java.util.List;
 
 @Configuration
 public class SecurityConfig {
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder(12);
+    }
 
     @Bean
     SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
@@ -28,28 +40,34 @@ public class SecurityConfig {
                     return c;
                 }))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .exceptionHandling(eh -> eh
+                        .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
+                )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
-                        // auth endpoints
-                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout").permitAll()
+                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup").permitAll()
                         .requestMatchers("/auth/me").authenticated()
 
-                        // ✅ board2: list is public
-                        .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts*").permitAll()
-
-                        // ✅ board2: detail (and anything under it) requires login
+                        .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts/**").authenticated()
-
-                        // ✅ board2: write/edit/delete requires login too (recommended)
                         .requestMatchers("/api/boards/board2/**").authenticated()
 
-                        // ✅ other boards (board1 etc): allow through (guest pw logic)
                         .requestMatchers("/api/boards/**").permitAll()
 
                         .anyRequest().permitAll()
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+
+        http.headers(h -> h
+                .frameOptions(f -> f.deny())
+                .contentTypeOptions(c -> {})
+                .referrerPolicy(r -> r.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
+                .addHeaderWriter(new PermissionsPolicyHeaderWriter("geolocation=(), microphone=(), camera=()"))
+                .addHeaderWriter(new ContentSecurityPolicyHeaderWriter(
+                        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+                ))
+        );
 
         return http.build();
     }
