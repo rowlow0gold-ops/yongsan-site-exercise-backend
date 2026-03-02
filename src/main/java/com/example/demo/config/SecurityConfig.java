@@ -29,14 +29,23 @@ public class SecurityConfig {
                 }))
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // IMPORTANT: allow preflight
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 
                         // auth endpoints
-                        .requestMatchers("/auth/**").permitAll()
+                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout").permitAll()
+                        .requestMatchers("/auth/me").authenticated()
 
-                        // your existing public APIs
-                        .requestMatchers("/api/**").permitAll()
+                        // ✅ board2: list is public
+                        .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts*").permitAll()
+
+                        // ✅ board2: detail (and anything under it) requires login
+                        .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts/**").authenticated()
+
+                        // ✅ board2: write/edit/delete requires login too (recommended)
+                        .requestMatchers("/api/boards/board2/**").authenticated()
+
+                        // ✅ other boards (board1 etc): allow through (guest pw logic)
+                        .requestMatchers("/api/boards/**").permitAll()
 
                         .anyRequest().permitAll()
                 )

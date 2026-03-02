@@ -164,4 +164,29 @@ public class AuthController {
     public record UserRes(Long id, String email, String role, String name) {
         public UserRes(AppUser u) { this(u.getId(), u.getEmail(), u.getRole(), u.getName()); }
     }
+
+    @PostMapping("/signup")
+    public ResponseEntity<?> signup(@RequestBody SignupReq req) {
+        String email = req.getEmail().trim().toLowerCase();
+
+        if (users.findByEmail(email).isPresent()) {
+            return ResponseEntity.badRequest().body(new Msg("Email already exists"));
+        }
+
+        AppUser u = new AppUser();
+        u.setEmail(email);
+        u.setName(req.getName());
+        u.setRole("USER");
+        u.setPasswordHash(encoder.encode(req.getPassword()));
+        users.save(u);
+
+        return ResponseEntity.ok(new Msg("OK"));
+    }
+
+    @Data
+    public static class SignupReq {
+        @NotBlank private String name;
+        @Email @NotBlank private String email;
+        @NotBlank private String password;
+    }
 }

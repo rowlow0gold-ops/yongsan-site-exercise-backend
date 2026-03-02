@@ -16,4 +16,5 @@ public class BoardPostDetailResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private Long views;
+    private Long authorUserId;
 }
