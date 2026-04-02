@@ -38,10 +38,15 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.configurationSource(req -> {
                     CorsConfiguration c = new CorsConfiguration();
-                    c.setAllowedOrigins(List.of("http://localhost:5173", "https://minhojan-world.site", "https://www.minhojan-world.site"));
                     c.setAllowedMethods(List.of("GET","POST","PUT","DELETE","OPTIONS"));
                     c.setAllowedHeaders(List.of("*"));
                     c.setAllowCredentials(true);
+                    c.setAllowedOrigins(List.of(
+                            "http://localhost:5173",
+                            "https://minhojan-world.site",
+                            "https://www.minhojan-world.site",
+                            "https://test.minhojan-world.site"
+                    ));
                     return c;
                 }))
                 .oauth2Login(oauth2 -> oauth2
