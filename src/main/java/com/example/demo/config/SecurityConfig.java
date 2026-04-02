@@ -44,7 +44,7 @@ public class SecurityConfig {
                 .oauth2Login(Customizer.withDefaults())  // ← ADD THIS LINE
                 .sessionManagement(sm -> sm
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-                .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy()
+                .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy())
                 )
                 .exceptionHandling(eh -> eh
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
