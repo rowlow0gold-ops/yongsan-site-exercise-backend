@@ -15,6 +15,7 @@ public class AuthContext {
         catch (Exception e) { return null; }
     }
 
+
     public static Long requireUserId() {
         Long id = userIdOrNull();
         if (id == null) throw new org.springframework.security.access.AccessDeniedException("Login required.");
