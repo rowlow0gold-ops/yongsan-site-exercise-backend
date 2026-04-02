@@ -1,5 +1,6 @@
 package com.example.demo.config;
 
+import com.example.demo.auth.OAuth2SuccessHandler;
 import com.example.demo.auth.jwt.JwtAuthFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,12 +17,15 @@ import org.springframework.security.web.header.writers.ContentSecurityPolicyHead
 import org.springframework.security.web.header.writers.PermissionsPolicyHeaderWriter;
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.security.config.Customizer;
+import lombok.RequiredArgsConstructor;
 
 import java.util.List;
 
 @Configuration
+@RequiredArgsConstructor
 public class SecurityConfig {
+
+    private final OAuth2SuccessHandler oAuth2SuccessHandler;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -40,7 +44,9 @@ public class SecurityConfig {
                     c.setAllowCredentials(true);
                     return c;
                 }))
-                .oauth2Login(Customizer.withDefaults())  // ← ADD THIS LINE
+                .oauth2Login(oauth2 -> oauth2
+                        .successHandler(oAuth2SuccessHandler)
+                )
                 .sessionManagement(sm -> sm
                         .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
                 )
@@ -49,18 +55,13 @@ public class SecurityConfig {
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
-
                         .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup").permitAll()
                         .requestMatchers("/auth/me").authenticated()
-
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts/**").authenticated()
                         .requestMatchers("/api/boards/board2/**").authenticated()
-
                         .requestMatchers("/api/boards/**").permitAll()
-
                         .requestMatchers("/login/oauth2/**", "/oauth2/**").permitAll()
-
                         .anyRequest().permitAll()
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
