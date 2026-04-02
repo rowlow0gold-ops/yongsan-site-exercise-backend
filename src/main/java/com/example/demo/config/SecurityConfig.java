@@ -39,6 +39,7 @@ public class SecurityConfig {
                     c.setAllowCredentials(true);
                     return c;
                 }))
+                .oauth2Login(Customizer.withDefaults())  // ← ADD THIS LINE
                 .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(eh -> eh
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
