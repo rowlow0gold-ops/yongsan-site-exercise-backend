@@ -17,6 +17,7 @@ import org.springframework.security.web.header.writers.PermissionsPolicyHeaderWr
 import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.web.authentication.session.NullAuthenticatedSessionStrategy;
 
 import java.util.List;
 
@@ -41,7 +42,10 @@ public class SecurityConfig {
                     return c;
                 }))
                 .oauth2Login(Customizer.withDefaults())  // ← ADD THIS LINE
-                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .sessionManagement(sm -> sm
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                .sessionAuthenticationStrategy(new NullAuthenticatedSessionStrategy()
+                )
                 .exceptionHandling(eh -> eh
                         .authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED))
                 )
@@ -56,6 +60,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/boards/board2/**").authenticated()
 
                         .requestMatchers("/api/boards/**").permitAll()
+
+                        .requestMatchers("/login/oauth2/**", "/oauth2/**").permitAll()
 
                         .anyRequest().permitAll()
                 )
