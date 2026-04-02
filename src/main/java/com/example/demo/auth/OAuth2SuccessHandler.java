@@ -32,6 +32,9 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
     @Value("${app.jwt.refreshCookieName}")
     private String refreshCookieName;
 
+    @Value("${app.oauth2.redirect-uri}")
+    private String redirectUri;
+
     @Override
     public void onAuthenticationSuccess(HttpServletRequest request,
                                         HttpServletResponse response,
@@ -68,7 +71,7 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
                 + "; SameSite=Lax";
         response.addHeader("Set-Cookie", cookie);
 
-        // Redirect to frontend with access token
-        response.sendRedirect("https://minhojan-world.site?token=" + accessToken);
+        // Then change the redirect:
+        response.sendRedirect(redirectUri + "?token=" + accessToken);
     }
 }
