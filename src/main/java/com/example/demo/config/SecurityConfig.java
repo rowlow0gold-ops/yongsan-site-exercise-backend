@@ -35,7 +35,7 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .cors(cors -> cors.configurationSource(req -> {
                     CorsConfiguration c = new CorsConfiguration();
-                    c.setAllowedOrigins(List.of("http://localhost:5173"));
+                    c.setAllowedOrigins(List.of("http://localhost:5173", "https://minhojan-world.site", "https://www.minhojan-world.site"));
                     c.setAllowedMethods(List.of("GET","POST","PUT","DELETE","OPTIONS"));
                     c.setAllowedHeaders(List.of("*"));
                     c.setAllowCredentials(true);
@@ -73,7 +73,7 @@ public class SecurityConfig {
                 .referrerPolicy(r -> r.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.NO_REFERRER))
                 .addHeaderWriter(new PermissionsPolicyHeaderWriter("geolocation=(), microphone=(), camera=()"))
                 .addHeaderWriter(new ContentSecurityPolicyHeaderWriter(
-                        "default-src 'none'; frame-ancestors 'none'; base-uri 'none'"
+                        "default-src 'self'; frame-ancestors 'none'; base-uri 'none'"
                 ))
         );
 
