@@ -1,24 +1,22 @@
 name: Deploy Backend
-
 on:
   push:
     branches:
       - main
+      - develop
 
 jobs:
-  build-and-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -26,7 +24,31 @@ jobs:
           push: true
           tags: ghcr.io/rowlow0gold-ops/yongsan-backend:latest
 
-      - name: Deploy to server
+  deploy-test:
+    needs: build
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - name: Deploy to test server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.TEST_SERVER_HOST }}
+          username: ${{ secrets.TEST_SERVER_USER }}
+          key: ${{ secrets.TEST_SERVER_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            echo ${{ secrets.GHCR_TOKEN }} | docker login ghcr.io -u rowlow0gold-ops --password-stdin
+            docker pull ghcr.io/rowlow0gold-ops/yongsan-backend:latest
+            docker compose up -d
+
+  deploy-prod:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to prod server
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.SERVER_HOST }}
