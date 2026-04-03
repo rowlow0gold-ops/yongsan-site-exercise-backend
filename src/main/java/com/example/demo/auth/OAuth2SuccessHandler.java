@@ -16,6 +16,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.UUID;
 
 @Component
@@ -39,31 +40,65 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
     public void onAuthenticationSuccess(HttpServletRequest request,
                                         HttpServletResponse response,
                                         Authentication authentication) throws IOException {
-
         OAuth2User oAuth2User = (OAuth2User) authentication.getPrincipal();
+
         String email = oAuth2User.getAttribute("email");
         String name = oAuth2User.getAttribute("name");
 
-        // Find or create user
-        AppUser user = users.findByEmail(email).orElseGet(() -> {
+        // Kakao: check kakao_account.email and kakao_account.profile.nickname
+        if (email == null) {
+            Object kakaoAccount = oAuth2User.getAttribute("kakao_account");
+            if (kakaoAccount instanceof Map<?,?> accountMap) {
+                email = (String) accountMap.get("email");
+                Object profile = accountMap.get("profile");
+                if (profile instanceof Map<?,?> profileMap) {
+                    name = (String) profileMap.get("nickname");
+                }
+            }
+        }
+
+        // Kakao: fallback to properties.nickname
+        if (name == null) {
+            Object properties = oAuth2User.getAttribute("properties");
+            if (properties instanceof Map<?,?> propMap) {
+                name = (String) propMap.get("nickname");
+            }
+        }
+
+        // Last resort: use Kakao user ID as email
+        if (email == null) {
+            Object id = oAuth2User.getAttribute("id");
+            if (id != null) {
+                email = id + "@kakao.local";
+            }
+        }
+
+        if (name == null) name = "User";
+
+        if (email == null) {
+            response.sendRedirect(redirectUri + "?error=no_email");
+            return;
+        }
+
+        String finalEmail = email;
+        String finalName = name;
+
+        AppUser user = users.findByEmail(finalEmail).orElseGet(() -> {
             AppUser newUser = new AppUser();
-            newUser.setEmail(email);
-            newUser.setName(name);
+            newUser.setEmail(finalEmail);
+            newUser.setName(finalName);
             newUser.setRole("USER");
             newUser.setPasswordHash("OAUTH2_NO_PASSWORD");
             return users.save(newUser);
         });
 
-        // Generate JWT
         String accessToken = jwt.createAccessToken(user.getId(), user.getRole());
 
-        // Generate refresh token
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
-        String refreshHash = rawRefresh; // simplified
+        String refreshHash = rawRefresh;
         LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(refreshTtlSeconds);
         refreshTokens.save(new RefreshToken(user.getId(), refreshHash, expiresAt));
 
-        // Set refresh cookie
         String cookie = refreshCookieName + "=" + rawRefresh
                 + "; Path=/"
                 + "; HttpOnly"
@@ -71,7 +106,6 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
                 + "; SameSite=Lax";
         response.addHeader("Set-Cookie", cookie);
 
-        // Then change the redirect:
         response.sendRedirect(redirectUri + "?token=" + accessToken);
     }
 }
