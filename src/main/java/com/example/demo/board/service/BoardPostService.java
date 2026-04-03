@@ -1,170 +1,75 @@
-package com.example.demo.board.service;
+package com.example.demo.board.entity;
 
-import com.example.demo.auth.AuthContext;
-import com.example.demo.board.dto.*;
-import com.example.demo.board.entity.BoardPost;
-import com.example.demo.board.repository.BoardPostRepository;
-import jakarta.persistence.EntityNotFoundException;
-import lombok.RequiredArgsConstructor;
-import org.jspecify.annotations.NonNull;
-import org.springframework.data.domain.*;
-import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import jakarta.persistence.*;
+import lombok.Getter;
+import lombok.Setter;
+import lombok.NoArgsConstructor;
 
-import java.util.List;
+import java.time.LocalDateTime;
 
-import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
+@Entity
+@Table(name = "board_posts")
+@Getter
+@Setter
+@NoArgsConstructor
+public class BoardPost {
 
-import com.example.demo.board.BoardKeys;
-import org.springframework.security.crypto.password.PasswordEncoder;
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
-@Service
-@RequiredArgsConstructor
-public class BoardPostService {
+    @Column(name = "board_key", nullable = false)
+    private String boardKey;
 
-    private final BoardPostRepository repository;
-    private final PasswordEncoder passwordEncoder;
+    @Column(nullable = false)
+    private String title;
 
-    private void validateBoardKey(String boardKey) {
-        if (!List.of("board1", "board2").contains(boardKey)) {
-            throw new EntityNotFoundException("board not found");
-        }
+    private String author;
+
+    @Column(columnDefinition = "TEXT")
+    private String content;
+
+    @Column(name = "created_at", nullable = false)
+    private LocalDateTime createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private LocalDateTime updatedAt;
+
+    @Column(nullable = false)
+    private Long views = 0L;
+
+    @Column(nullable = false, length = 10)
+    private String visibility = "PUBLIC"; // PUBLIC or PRIVATE
+
+    @Column(name = "password_hash")
+    private String passwordHash;
+
+    @Column(name = "author_user_id")
+    private Long authorUserId;
+
+    public BoardPost(String boardKey, String title, String author, String content) {
+        this.boardKey = boardKey;
+        this.title = title;
+        this.author = author;
+        this.content = content;
     }
 
-    @Transactional(readOnly = true)
-    public BoardPostListResponse list(String boardKey, int page, int size, String q) {
-        validateBoardKey(boardKey);
-        int safePage = Math.max(page, 1);
-        int safeSize = Math.min(Math.max(size, 1), 50); // max 50
-        Pageable pageable = PageRequest.of(safePage - 1, safeSize, Sort.by(Sort.Direction.DESC, "id"));
-        String safeQ = (q == null) ? null : q.trim();
-        if (safeQ != null && safeQ.length() > 100) {
-            throw new IllegalArgumentException("q is too long");
-        }
-        Page<BoardPost> result = repository.findPage(boardKey, safeQ, pageable);
-
-        List<BoardPostListResponse.Item> items = result.getContent().stream()
-                .map(p -> new BoardPostListResponse.Item(
-                        p.getId(), p.getTitle(), p.getAuthor(), p.getCreatedAt(), p.getUpdatedAt(), p.getViews()
-                ))
-                .toList();
-
-        return new BoardPostListResponse(items, result.getTotalElements());
+    @PrePersist
+    void onCreate() {
+        this.createdAt = LocalDateTime.now();
+        this.updatedAt = this.createdAt;
+        if (this.visibility == null) this.visibility = "PUBLIC";
     }
 
-    @Transactional
-    public BoardPostDetailResponse detail(String boardKey, Long id) {
-        validateBoardKey(boardKey);
-        int updated = repository.incrementViews(boardKey, id);
-
-        if (updated == 0) throw new EntityNotFoundException("post not found");
-
-        BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
-                .orElseThrow(() -> new EntityNotFoundException("post not found"));
-
-        return new BoardPostDetailResponse(
-                p.getId(), p.getBoardKey(), p.getTitle(), p.getAuthor(), p.getContent(),
-                p.getCreatedAt(), p.getUpdatedAt(), p.getViews(), p.getAuthorUserId()
-        );
+    @PreUpdate
+    void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
     }
 
-    @Transactional
-    public Long create(String boardKey, BoardPostWriteRequest req) {
-        validateBoardKey(boardKey);
-        Long userId = AuthContext.userIdOrNull();
-
-        // ✅ board2 must be logged in
-        if ("board2".equals(boardKey)) {
-            if (userId == null) throw new AccessDeniedException("Login required.");
-        }
-
-        String title = req.getTitle().trim();
-        String author = req.getAuthor() == null ? null : req.getAuthor().trim();
-        String content = req.getContent().trim();
-
-        BoardPost post = new BoardPost(boardKey, title, author, content);
-
-        // ✅ if logged in, always save authorUserId (for board2 and also board1 member posts)
-        if (userId != null) {
-            post.setAuthorUserId(userId);
-            post.setPasswordHash(null);
-        } else {
-            // guest allowed only for board1
-            if (BoardKeys.PRAISE.equals(boardKey)) {
-                if (req.getPassword() == null || req.getPassword().length() < 6) {
-                    throw new IllegalArgumentException("Password must be at least 6 characters.");
-                }
-                post.setPasswordHash(passwordEncoder.encode(req.getPassword()));
-                post.setAuthorUserId(null);
-            } else {
-                throw new AccessDeniedException("Login required.");
-            }
-        }
-
-        return repository.save(post).getId();
-    }
-
-    @Transactional
-    public void update(String boardKey, Long id, BoardPostWriteRequest req) {
-        validateBoardKey(boardKey);
-        BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
-                .orElseThrow(() -> new EntityNotFoundException("post not found"));
-
-        if ("board2".equals(boardKey)) {
-            Long me = AuthContext.userIdOrNull();
-            if (me == null) throw new AccessDeniedException("Login required.");
-            if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-        }
-
-        if (BoardKeys.PRAISE.equals(boardKey)) {
-            if (p.getAuthorUserId() != null) {
-                // ✅ member post → JWT + owner check
-                Long me = AuthContext.userIdOrNull();
-                if (me == null) throw new AccessDeniedException("Login required.");
-                if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-            } else {
-                // ✅ guest post → password check
-                if (req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
-                if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
-                    throw new org.springframework.security.access.AccessDeniedException("Wrong password.");
-                }
-            }
-        }
-
-        String title = req.getTitle().trim();
-        String author = req.getAuthor() == null ? null : req.getAuthor().trim();
-        String content = req.getContent().trim();
-
-        p.update(title, author, content);
-    }
-
-    @Transactional
-    public void delete(String boardKey, Long id, BoardPostWriteRequest req) {
-        validateBoardKey(boardKey);
-        BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
-                .orElseThrow(() -> new EntityNotFoundException("post not found"));
-
-        if ("board2".equals(boardKey)) {
-            Long me = AuthContext.userIdOrNull();
-            if (me == null) throw new AccessDeniedException("Login required.");
-            if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-        }
-
-        if (BoardKeys.PRAISE.equals(boardKey)) {
-            if (p.getAuthorUserId() != null) {
-                Long me = AuthContext.userIdOrNull();
-                if (me == null) throw new AccessDeniedException("Login required.");
-                if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-            } else {
-                if (req == null || req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
-                if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
-                    throw new org.springframework.security.access.AccessDeniedException("Wrong password.");
-                }
-            }
-        }
-
-        repository.delete(p);
+    public void update(String title, String author, String content, String visibility) {
+        this.title = title;
+        this.author = author;
+        this.content = content;
+        if (visibility != null) this.visibility = visibility;
     }
 }
