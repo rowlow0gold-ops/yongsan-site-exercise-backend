@@ -38,6 +38,14 @@ public class BoardPost {
     @Column(nullable = false)
     private Long views = 0L;
 
+    @Column(nullable = false, length = 10)
+    private String visibility = "PUBLIC"; // PUBLIC or PRIVATE
+
+    @Column(name = "password_hash")
+    private String passwordHash;
+
+    @Column(name = "author_user_id")
+    private Long authorUserId;
 
     public BoardPost(String boardKey, String title, String author, String content) {
         this.boardKey = boardKey;
@@ -50,6 +58,7 @@ public class BoardPost {
     void onCreate() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = this.createdAt;
+        if (this.visibility == null) this.visibility = "PUBLIC";
     }
 
     @PreUpdate
@@ -57,15 +66,10 @@ public class BoardPost {
         this.updatedAt = LocalDateTime.now();
     }
 
-    public void update(String title, String author, String content) {
+    public void update(String title, String author, String content, String visibility) {
         this.title = title;
         this.author = author;
         this.content = content;
+        if (visibility != null) this.visibility = visibility;
     }
-
-    @Column(name = "password_hash")
-    private String passwordHash;
-
-    @Column(name = "author_user_id")
-    private Long authorUserId;
 }
