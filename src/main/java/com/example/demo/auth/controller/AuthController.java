@@ -19,6 +19,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
+import com.example.demo.auth.RateLimitService;
 import com.example.demo.auth.jwt.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
 
@@ -40,6 +41,7 @@ public class AuthController {
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
     private final TokenBlacklistService blacklist;
+    private final RateLimitService rateLimit;
 
     private final long refreshTtlSeconds;
     private final String refreshCookieName;
@@ -51,6 +53,7 @@ public class AuthController {
             RefreshTokenRepository refreshTokens,
             JwtUtil jwt,
             TokenBlacklistService blacklist,
+            RateLimitService rateLimit,
             PasswordEncoder encoder,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName
@@ -59,20 +62,33 @@ public class AuthController {
         this.refreshTokens = refreshTokens;
         this.jwt = jwt;
         this.blacklist = blacklist;
+        this.rateLimit = rateLimit;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.refreshCookieName = refreshCookieName;
         this.encoder = encoder;
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@Valid @RequestBody LoginReq req, HttpServletResponse res) {
+    public ResponseEntity<?> login(@Valid @RequestBody LoginReq req,
+                                   HttpServletRequest httpReq, HttpServletResponse res) {
+        String ip = httpReq.getRemoteAddr();
+
+        if (!rateLimit.isAllowed(ip)) {
+            long retryAfter = rateLimit.getRetryAfterSeconds(ip);
+            return ResponseEntity.status(429)
+                    .header("Retry-After", String.valueOf(retryAfter))
+                    .body(new Msg("Too many login attempts. Try again in " + retryAfter + " seconds."));
+        }
+
         String email = req.getEmail().trim().toLowerCase();
 
         AppUser u = users.findByEmail(email).orElse(null);
         if (u == null || !encoder.matches(req.getPassword(), u.getPasswordHash())) {
+            rateLimit.recordFailure(ip);
             return ResponseEntity.status(401).body(new Msg("Invalid credentials"));
         }
 
+        rateLimit.clearAttempts(ip);
         String accessToken = jwt.createAccessToken(u.getId(), u.getRole());
 
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
