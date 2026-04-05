@@ -21,5 +21,7 @@ public class BoardPostListResponse {
         private LocalDateTime createdAt;
         private LocalDateTime updatedAt;
         private Long views;
+        private String visibility;   // "PUBLIC" or "PRIVATE"
+        private Long authorUserId;   // null for guest posts
     }
 }

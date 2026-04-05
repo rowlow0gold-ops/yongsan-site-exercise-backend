@@ -15,6 +15,16 @@ public class AuthContext {
         catch (Exception e) { return null; }
     }
 
+    public static String roleOrNull() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) return null;
+        return auth.getAuthorities().stream()
+                .map(a -> a.getAuthority())
+                .filter(a -> a.startsWith("ROLE_"))
+                .map(a -> a.substring(5))
+                .findFirst()
+                .orElse(null);
+    }
 
     public static Long requireUserId() {
         Long id = userIdOrNull();

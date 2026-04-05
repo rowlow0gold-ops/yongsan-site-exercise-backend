@@ -6,7 +6,6 @@ import com.example.demo.board.entity.BoardPost;
 import com.example.demo.board.repository.BoardPostRepository;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
-import org.jspecify.annotations.NonNull;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,8 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 
 import com.example.demo.board.BoardKeys;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -37,7 +34,7 @@ public class BoardPostService {
     public BoardPostListResponse list(String boardKey, int page, int size, String q) {
         validateBoardKey(boardKey);
         int safePage = Math.max(page, 1);
-        int safeSize = Math.min(Math.max(size, 1), 50); // max 50
+        int safeSize = Math.min(Math.max(size, 1), 50);
         Pageable pageable = PageRequest.of(safePage - 1, safeSize, Sort.by(Sort.Direction.DESC, "id"));
         String safeQ = (q == null) ? null : q.trim();
         if (safeQ != null && safeQ.length() > 100) {
@@ -47,7 +44,9 @@ public class BoardPostService {
 
         List<BoardPostListResponse.Item> items = result.getContent().stream()
                 .map(p -> new BoardPostListResponse.Item(
-                        p.getId(), p.getTitle(), p.getAuthor(), p.getCreatedAt(), p.getUpdatedAt(), p.getViews()
+                        p.getId(), p.getTitle(), p.getAuthor(),
+                        p.getCreatedAt(), p.getUpdatedAt(), p.getViews(),
+                        p.getVisibility(), p.getAuthorUserId()
                 ))
                 .toList();
 
@@ -58,15 +57,26 @@ public class BoardPostService {
     public BoardPostDetailResponse detail(String boardKey, Long id) {
         validateBoardKey(boardKey);
         int updated = repository.incrementViews(boardKey, id);
-
         if (updated == 0) throw new EntityNotFoundException("post not found");
 
         BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
                 .orElseThrow(() -> new EntityNotFoundException("post not found"));
 
+        // PRIVATE: only author or ADMIN can view
+        if ("PRIVATE".equals(p.getVisibility())) {
+            Long me = AuthContext.userIdOrNull();
+            String myRole = AuthContext.roleOrNull();
+            boolean isAdmin = "ADMIN".equals(myRole);
+            boolean isAuthor = me != null && me.equals(p.getAuthorUserId());
+            if (!isAdmin && !isAuthor) {
+                throw new AccessDeniedException("This post is private.");
+            }
+        }
+
         return new BoardPostDetailResponse(
                 p.getId(), p.getBoardKey(), p.getTitle(), p.getAuthor(), p.getContent(),
-                p.getCreatedAt(), p.getUpdatedAt(), p.getViews(), p.getAuthorUserId()
+                p.getCreatedAt(), p.getUpdatedAt(), p.getViews(), p.getAuthorUserId(),
+                p.getVisibility()
         );
     }
 
@@ -75,7 +85,6 @@ public class BoardPostService {
         validateBoardKey(boardKey);
         Long userId = AuthContext.userIdOrNull();
 
-        // ✅ board2 must be logged in
         if ("board2".equals(boardKey)) {
             if (userId == null) throw new AccessDeniedException("Login required.");
         }
@@ -83,15 +92,15 @@ public class BoardPostService {
         String title = req.getTitle().trim();
         String author = req.getAuthor() == null ? null : req.getAuthor().trim();
         String content = req.getContent().trim();
+        String visibility = req.getVisibility() != null ? req.getVisibility() : "PUBLIC";
 
         BoardPost post = new BoardPost(boardKey, title, author, content);
+        post.setVisibility(visibility);
 
-        // ✅ if logged in, always save authorUserId (for board2 and also board1 member posts)
         if (userId != null) {
             post.setAuthorUserId(userId);
             post.setPasswordHash(null);
         } else {
-            // guest allowed only for board1
             if (BoardKeys.PRAISE.equals(boardKey)) {
                 if (req.getPassword() == null || req.getPassword().length() < 6) {
                     throw new IllegalArgumentException("Password must be at least 6 characters.");
@@ -120,24 +129,22 @@ public class BoardPostService {
 
         if (BoardKeys.PRAISE.equals(boardKey)) {
             if (p.getAuthorUserId() != null) {
-                // ✅ member post → JWT + owner check
                 Long me = AuthContext.userIdOrNull();
                 if (me == null) throw new AccessDeniedException("Login required.");
                 if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
             } else {
-                // ✅ guest post → password check
                 if (req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
                 if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
-                    throw new org.springframework.security.access.AccessDeniedException("Wrong password.");
+                    throw new AccessDeniedException("Wrong password.");
                 }
             }
         }
 
-        String title = req.getTitle().trim();
-        String author = req.getAuthor() == null ? null : req.getAuthor().trim();
-        String content = req.getContent().trim();
-
-        p.update(title, author, content);
+        String visibility = req.getVisibility() != null ? req.getVisibility() : p.getVisibility();
+        p.update(req.getTitle().trim(),
+                req.getAuthor() == null ? null : req.getAuthor().trim(),
+                req.getContent().trim(),
+                visibility);
     }
 
     @Transactional
@@ -160,7 +167,7 @@ public class BoardPostService {
             } else {
                 if (req == null || req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
                 if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
-                    throw new org.springframework.security.access.AccessDeniedException("Wrong password.");
+                    throw new AccessDeniedException("Wrong password.");
                 }
             }
         }

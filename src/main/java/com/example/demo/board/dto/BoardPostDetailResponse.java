@@ -17,4 +17,5 @@ public class BoardPostDetailResponse {
     private LocalDateTime updatedAt;
     private Long views;
     private Long authorUserId;
+    private String visibility;  // "PUBLIC" or "PRIVATE"
 }
