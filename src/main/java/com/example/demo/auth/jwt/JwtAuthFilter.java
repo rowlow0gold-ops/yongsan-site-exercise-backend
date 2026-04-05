@@ -20,9 +20,11 @@ import java.util.List;
 public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwt;
+    private final TokenBlacklistService blacklist;
 
-    public JwtAuthFilter(JwtUtil jwt) {
+    public JwtAuthFilter(JwtUtil jwt, TokenBlacklistService blacklist) {
         this.jwt = jwt;
+        this.blacklist = blacklist;
     }
 
     @Override
@@ -36,6 +38,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         if (header != null && header.startsWith("Bearer ")) {
             String token = header.substring(7);
             try {
+                if (blacklist.isBlacklisted(token)) {
+                    SecurityContextHolder.clearContext();
+                    filterChain.doFilter(request, response);
+                    return;
+                }
+
                 Jws<Claims> jws = jwt.parse(token);
                 String userId = jws.getBody().getSubject();
                 String role = String.valueOf(jws.getBody().get("role"));
