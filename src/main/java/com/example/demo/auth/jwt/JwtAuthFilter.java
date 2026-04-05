@@ -58,6 +58,10 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 // invalid token -> treat as unauthenticated
                 SecurityContextHolder.clearContext();
             }
+        } else {
+            // No JWT header → clear any session-based auth
+            // Prevents HTTP session from keeping user logged in after token is gone
+            SecurityContextHolder.clearContext();
         }
 
         filterChain.doFilter(request, response);

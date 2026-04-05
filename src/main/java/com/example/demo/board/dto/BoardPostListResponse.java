@@ -27,5 +27,6 @@ public class BoardPostListResponse implements Serializable {
         private Long views;
         private String visibility;   // "PUBLIC" or "PRIVATE"
         private Long authorUserId;   // null for guest posts
+        private boolean guestPost;   // true if no authorUserId (guest-written)
     }
 }
