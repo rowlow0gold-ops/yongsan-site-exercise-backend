@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/boards/{boardKey}/posts")
+@io.swagger.v3.oas.annotations.tags.Tag(name = "Board", description = "게시판 API (목록/상세/작성/수정/삭제)")
 public class BoardPostController {
 
     private final BoardPostService service;
