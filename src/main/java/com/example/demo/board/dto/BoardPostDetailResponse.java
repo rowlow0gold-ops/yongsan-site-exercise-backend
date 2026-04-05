@@ -2,12 +2,15 @@ package com.example.demo.board.dto;
 
 import lombok.AllArgsConstructor;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 
+import java.io.Serializable;
 import java.time.LocalDateTime;
 
 @Getter
+@NoArgsConstructor
 @AllArgsConstructor
-public class BoardPostDetailResponse {
+public class BoardPostDetailResponse implements Serializable {
     private Long id;
     private String boardKey;
     private String title;
