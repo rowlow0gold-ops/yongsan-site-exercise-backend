@@ -12,4 +12,9 @@ public class HealthController {
     public String health() {
         return "ok";
     }
+
+    @GetMapping("/sentry-test")
+    public String sentryTest() {
+        throw new RuntimeException("Sentry backend test error!");
+    }
 }
