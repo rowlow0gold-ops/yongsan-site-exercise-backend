@@ -35,6 +35,7 @@ import java.util.UUID;
 
 @RestController
 @RequestMapping("/auth")
+@io.swagger.v3.oas.annotations.tags.Tag(name = "Auth", description = "인증 API (로그인/회원가입/토큰)")
 public class AuthController {
 
     private final AppUserRepository users;
