@@ -16,6 +16,8 @@ import org.springframework.security.access.AccessDeniedException;
 
 import com.example.demo.board.BoardKeys;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.CacheEvict;
 
 @Service
 @RequiredArgsConstructor
@@ -30,6 +32,7 @@ public class BoardPostService {
         }
     }
 
+    @Cacheable(value = "boardList", key = "#boardKey + ':' + #page + ':' + #size + ':' + (#q ?: '')")
     @Transactional(readOnly = true)
     public BoardPostListResponse list(String boardKey, int page, int size, String q) {
         validateBoardKey(boardKey);
@@ -80,6 +83,7 @@ public class BoardPostService {
         );
     }
 
+    @CacheEvict(value = "boardList", allEntries = true)
     @Transactional
     public Long create(String boardKey, BoardPostWriteRequest req) {
         validateBoardKey(boardKey);
@@ -115,6 +119,7 @@ public class BoardPostService {
         return repository.save(post).getId();
     }
 
+    @CacheEvict(value = "boardList", allEntries = true)
     @Transactional
     public void update(String boardKey, Long id, BoardPostWriteRequest req) {
         validateBoardKey(boardKey);
@@ -147,6 +152,7 @@ public class BoardPostService {
                 visibility);
     }
 
+    @CacheEvict(value = "boardList", allEntries = true)
     @Transactional
     public void delete(String boardKey, Long id, BoardPostWriteRequest req) {
         validateBoardKey(boardKey);
