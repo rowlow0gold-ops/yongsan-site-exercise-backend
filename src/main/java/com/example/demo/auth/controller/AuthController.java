@@ -19,8 +19,14 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
+import com.example.demo.auth.jwt.TokenBlacklistService;
+import io.jsonwebtoken.Claims;
+
 import java.security.MessageDigest;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.Date;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,6 +39,7 @@ public class AuthController {
     private final AppUserRepository users;
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
+    private final TokenBlacklistService blacklist;
 
     private final long refreshTtlSeconds;
     private final String refreshCookieName;
@@ -43,6 +50,7 @@ public class AuthController {
             AppUserRepository users,
             RefreshTokenRepository refreshTokens,
             JwtUtil jwt,
+            TokenBlacklistService blacklist,
             PasswordEncoder encoder,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName
@@ -50,6 +58,7 @@ public class AuthController {
         this.users = users;
         this.refreshTokens = refreshTokens;
         this.jwt = jwt;
+        this.blacklist = blacklist;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.refreshCookieName = refreshCookieName;
         this.encoder = encoder;
@@ -110,6 +119,21 @@ public class AuthController {
 
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletRequest req, HttpServletResponse res) {
+        // Blacklist the access token in Redis
+        String authHeader = req.getHeader("Authorization");
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String accessToken = authHeader.substring(7);
+            try {
+                Claims claims = jwt.parse(accessToken).getBody();
+                Date exp = claims.getExpiration();
+                Duration remaining = Duration.between(Instant.now(), exp.toInstant());
+                blacklist.blacklist(accessToken, remaining);
+            } catch (Exception ignored) {
+                // token already expired or invalid — no need to blacklist
+            }
+        }
+
+        // Revoke refresh token in DB
         readCookie(req, refreshCookieName).ifPresent(raw -> {
             String hash = sha256Hex(raw);
             refreshTokens.findTopByTokenHashAndRevokedAtIsNull(hash).ifPresent(token -> {
