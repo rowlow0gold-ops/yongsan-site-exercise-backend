@@ -1,6 +1,7 @@
 package com.example.demo.board.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 
@@ -19,4 +20,7 @@ public class BoardPostWriteRequest {
     // for praise board (guest)
     @Size(min = 6, max = 100, message = "Password must be at least 6 characters.")
     private String password;
+
+    @Pattern(regexp = "PUBLIC|PRIVATE", message = "visibility must be PUBLIC or PRIVATE")
+    private String visibility = "PUBLIC";
 }
