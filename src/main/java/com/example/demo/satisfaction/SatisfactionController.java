@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequiredArgsConstructor
 @RequestMapping("/api/satisfaction")
+@io.swagger.v3.oas.annotations.tags.Tag(name = "Satisfaction", description = "만족도 조사 API")
 public class SatisfactionController {
 
     private final PageSatisfactionRepository repository;
