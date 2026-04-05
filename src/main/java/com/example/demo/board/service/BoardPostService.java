@@ -44,19 +44,33 @@ public class BoardPostService {
         }
         Page<BoardPost> result = repository.findPage(boardKey, safeQ, pageable);
 
+        Long me = AuthContext.userIdOrNull();
+        String myRole = AuthContext.roleOrNull();
+        boolean isAdmin = "ADMIN".equals(myRole);
+
         List<BoardPostListResponse.Item> items = result.getContent().stream()
-                .map(p -> new BoardPostListResponse.Item(
-                        p.getId(), p.getTitle(), p.getAuthor(),
-                        p.getCreatedAt(), p.getUpdatedAt(), p.getViews(),
-                        p.getVisibility(), p.getAuthorUserId()
-                ))
+                .map(p -> {
+                    boolean isPrivate = "PRIVATE".equals(p.getVisibility());
+                    boolean isOwner = me != null && me.equals(p.getAuthorUserId());
+                    boolean canSee = !isPrivate || isOwner || isAdmin;
+
+                    return new BoardPostListResponse.Item(
+                            p.getId(),
+                            canSee ? p.getTitle() : "비공개글입니다",
+                            canSee ? p.getAuthor() : "비공개",
+                            p.getCreatedAt(), p.getUpdatedAt(), p.getViews(),
+                            p.getVisibility(),
+                            canSee ? p.getAuthorUserId() : null,
+                            p.getAuthorUserId() == null
+                    );
+                })
                 .toList();
 
         return new BoardPostListResponse(items, result.getTotalElements());
     }
 
     @Transactional
-    public BoardPostDetailResponse detail(String boardKey, Long id) {
+    public BoardPostDetailResponse detail(String boardKey, Long id, String password) {
         validateBoardKey(boardKey);
         int updated = repository.incrementViews(boardKey, id);
         if (updated == 0) throw new EntityNotFoundException("post not found");
@@ -70,8 +84,15 @@ public class BoardPostService {
             String myRole = AuthContext.roleOrNull();
             boolean isAdmin = "ADMIN".equals(myRole);
             boolean isAuthor = me != null && me.equals(p.getAuthorUserId());
-            if (!isAdmin && !isAuthor) {
-                throw new AccessDeniedException("This post is private.");
+
+            // Guest private post: allow access with correct password
+            boolean isGuestPost = p.getAuthorUserId() == null;
+            boolean passwordOk = isGuestPost && password != null
+                    && p.getPasswordHash() != null
+                    && passwordEncoder.matches(password, p.getPasswordHash());
+
+            if (!isAdmin && !isAuthor && !passwordOk) {
+                throw new AccessDeniedException(isGuestPost ? "GUEST_PRIVATE" : "MEMBER_PRIVATE");
             }
         }
 
@@ -123,21 +144,26 @@ public class BoardPostService {
         BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
                 .orElseThrow(() -> new EntityNotFoundException("post not found"));
 
-        if ("board2".equals(boardKey)) {
-            Long me = AuthContext.userIdOrNull();
-            if (me == null) throw new AccessDeniedException("Login required.");
-            if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-        }
+        String myRole = AuthContext.roleOrNull();
+        boolean isAdmin = "ADMIN".equals(myRole);
 
-        if (BoardKeys.PRAISE.equals(boardKey)) {
-            if (p.getAuthorUserId() != null) {
+        if (!isAdmin) {
+            if ("board2".equals(boardKey)) {
                 Long me = AuthContext.userIdOrNull();
                 if (me == null) throw new AccessDeniedException("Login required.");
                 if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-            } else {
-                if (req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
-                if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
-                    throw new AccessDeniedException("Wrong password.");
+            }
+
+            if (BoardKeys.PRAISE.equals(boardKey)) {
+                if (p.getAuthorUserId() != null) {
+                    Long me = AuthContext.userIdOrNull();
+                    if (me == null) throw new AccessDeniedException("Login required.");
+                    if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
+                } else {
+                    if (req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
+                    if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
+                        throw new AccessDeniedException("Wrong password.");
+                    }
                 }
             }
         }
@@ -155,21 +181,26 @@ public class BoardPostService {
         BoardPost p = repository.findByIdAndBoardKey(id, boardKey)
                 .orElseThrow(() -> new EntityNotFoundException("post not found"));
 
-        if ("board2".equals(boardKey)) {
-            Long me = AuthContext.userIdOrNull();
-            if (me == null) throw new AccessDeniedException("Login required.");
-            if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-        }
+        String myRole = AuthContext.roleOrNull();
+        boolean isAdmin = "ADMIN".equals(myRole);
 
-        if (BoardKeys.PRAISE.equals(boardKey)) {
-            if (p.getAuthorUserId() != null) {
+        if (!isAdmin) {
+            if ("board2".equals(boardKey)) {
                 Long me = AuthContext.userIdOrNull();
                 if (me == null) throw new AccessDeniedException("Login required.");
                 if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
-            } else {
-                if (req == null || req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
-                if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
-                    throw new AccessDeniedException("Wrong password.");
+            }
+
+            if (BoardKeys.PRAISE.equals(boardKey)) {
+                if (p.getAuthorUserId() != null) {
+                    Long me = AuthContext.userIdOrNull();
+                    if (me == null) throw new AccessDeniedException("Login required.");
+                    if (!me.equals(p.getAuthorUserId())) throw new AccessDeniedException("Not the owner.");
+                } else {
+                    if (req == null || req.getPassword() == null) throw new IllegalArgumentException("Password is required.");
+                    if (p.getPasswordHash() == null || !passwordEncoder.matches(req.getPassword(), p.getPasswordHash())) {
+                        throw new AccessDeniedException("Wrong password.");
+                    }
                 }
             }
         }

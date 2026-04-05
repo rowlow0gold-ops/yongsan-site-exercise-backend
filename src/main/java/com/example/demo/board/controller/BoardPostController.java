@@ -4,6 +4,8 @@ import com.example.demo.board.dto.*;
 import com.example.demo.board.service.BoardPostService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -24,9 +26,23 @@ public class BoardPostController {
     }
 
     @GetMapping("/{id}")
-    public BoardPostDetailResponse detail(@PathVariable String boardKey, @PathVariable Long id) {
-        return service.detail(boardKey, id);
+    public ResponseEntity<?> detail(
+            @PathVariable String boardKey,
+            @PathVariable Long id,
+            @RequestParam(required = false) String password
+    ) {
+        try {
+            return ResponseEntity.ok(service.detail(boardKey, id, password));
+        } catch (AccessDeniedException e) {
+            boolean guestPrivate = "GUEST_PRIVATE".equals(e.getMessage());
+            return ResponseEntity.status(403).body(new PrivateErrorResponse(
+                    guestPrivate ? "비밀번호를 입력하면 열람할 수 있습니다." : "작성자 본인 또는 관리자만 열람할 수 있습니다.",
+                    guestPrivate
+            ));
+        }
     }
+
+    public record PrivateErrorResponse(String message, boolean guestPost) {}
 
     @PostMapping
     public IdResponse create(@PathVariable String boardKey, @Valid @RequestBody BoardPostWriteRequest req) {
