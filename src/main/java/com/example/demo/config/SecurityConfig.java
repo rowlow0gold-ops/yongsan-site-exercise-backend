@@ -45,7 +45,9 @@ public class SecurityConfig {
                             "http://localhost:5173",
                             "https://minhojan-world.site",
                             "https://www.minhojan-world.site",
-                            "https://test.minhojan-world.site"
+                            "https://test.minhojan-world.site",
+                            "https://yongsan.minhojan-world.site",
+                            "https://test-yongsan.minhojan-world.site"
                     ));
                     return c;
                 }))
