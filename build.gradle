@@ -52,6 +52,10 @@ dependencies {
 
     // Sentry
     implementation 'io.sentry:sentry:8.14.0'
+
+    // Monitoring
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly 'io.micrometer:micrometer-registry-prometheus'
 }
 
 tasks.named('test') {
