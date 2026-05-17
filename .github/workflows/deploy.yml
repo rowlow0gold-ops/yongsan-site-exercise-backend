@@ -42,7 +42,7 @@ jobs:
       - name: Health check
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://yongsan-backend.apps.svc.cluster.local:8080/actuator/health > /dev/null 2>&1; then
+            if curl -fsS https://yongsan.minhojan-world.site/actuator/health > /dev/null 2>&1; then
               echo "Backend healthy"
               exit 0
             fi
