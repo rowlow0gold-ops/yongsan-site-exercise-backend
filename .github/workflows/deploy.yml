@@ -8,31 +8,45 @@ on:
       - "**/*.md"
   workflow_dispatch:
 
+env:
+  IMAGE: stack-yongsan-backend:latest
+  DEPLOYMENT: yongsan-backend
+  NAMESPACE: apps
+  KUBECONFIG: /tmp/k3s.yaml
+
 jobs:
   deploy:
-    name: Build & Deploy (home server)
+    name: Build & Deploy to K3s
     runs-on: [self-hosted, home]
     steps:
-      - name: Sync source on home server
+      - name: Sync source
         run: |
           cd /home/jj/apps/yongsan-site-exercise-backend
           git fetch origin main
           git reset --hard origin/main
 
-      - name: Rebuild & restart backend (Spring Boot)
+      - name: Build image
         run: |
-          cd /home/jj/apps/stack
-          docker compose --env-file .env build yongsan-backend
-          docker compose --env-file .env up -d --no-deps yongsan-backend
+          cd /home/jj/apps/yongsan-site-exercise-backend
+          docker build -t ${{ env.IMAGE }} .
 
-      - name: Wait for startup
+      - name: Import into K3s containerd
         run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://yongsan-backend:8080/actuator/health > /dev/null 2>&1; then
-              echo "Backend healthy after ${i}x2s"
+          docker save ${{ env.IMAGE }} | /usr/local/bin/k3s ctr -n k8s.io images import -
+
+      - name: Rollout restart deployment
+        run: |
+          /usr/local/bin/k3s kubectl --insecure-skip-tls-verify rollout restart deployment/${{ env.DEPLOYMENT }} -n ${{ env.NAMESPACE }}
+          /usr/local/bin/k3s kubectl --insecure-skip-tls-verify rollout status deployment/${{ env.DEPLOYMENT }} -n ${{ env.NAMESPACE }} --timeout=180s
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://yongsan-backend.apps.svc.cluster.local:8080/actuator/health > /dev/null 2>&1; then
+              echo "Backend healthy"
               exit 0
             fi
-            sleep 2
+            sleep 3
           done
-          echo "Backend failed health check"
+          echo "Health check failed"
           exit 1
