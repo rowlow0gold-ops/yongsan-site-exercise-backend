@@ -29,6 +29,13 @@ build/
 Thumbs.db
 
 # =========================
+# Curl / debugging cookie jars (NEVER commit — may contain real tokens)
+# =========================
+cookies.txt
+*.cookies
+cookie-jar*
+
+# =========================
 # Eclipse / STS
 # =========================
 .apt_generated

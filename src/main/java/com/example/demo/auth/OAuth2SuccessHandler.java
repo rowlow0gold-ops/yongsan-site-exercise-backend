@@ -9,13 +9,17 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.security.MessageDigest;
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 
@@ -23,9 +27,13 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
 
+    private static final String EXCHANGE_PREFIX = "oauth-exchange:";
+    private static final Duration EXCHANGE_TTL = Duration.ofSeconds(60);
+
     private final AppUserRepository users;
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
+    private final StringRedisTemplate redis;
 
     @Value("${app.jwt.refreshTtlSeconds}")
     private long refreshTtlSeconds;
@@ -95,7 +103,7 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
         String accessToken = jwt.createAccessToken(user.getId(), user.getRole());
 
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
-        String refreshHash = rawRefresh;
+        String refreshHash = sha256Hex(rawRefresh);
         LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(refreshTtlSeconds);
         refreshTokens.save(new RefreshToken(user.getId(), refreshHash, expiresAt));
 
@@ -106,6 +114,23 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
                 + "; SameSite=Lax";
         response.addHeader("Set-Cookie", cookie);
 
-        response.sendRedirect(redirectUri + "?token=" + accessToken);
+        // Don't put the access token in the URL (browser history / logs / Referer header).
+        // Hand the browser a short-lived one-time code instead; the SPA exchanges it
+        // at POST /auth/exchange for the actual access token in a response body.
+        String code = UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
+        redis.opsForValue().set(EXCHANGE_PREFIX + code, accessToken, EXCHANGE_TTL);
+
+        response.sendRedirect(redirectUri + "?code=" + code);
+    }
+
+    private String sha256Hex(String raw) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] dig = md.digest(raw.getBytes());
+            return HexFormat.of().formatHex(dig);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 }

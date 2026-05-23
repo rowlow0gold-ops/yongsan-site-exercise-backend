@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 import com.example.demo.auth.RateLimitService;
 import com.example.demo.auth.jwt.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 import java.security.MessageDigest;
 import java.time.Duration;
@@ -38,11 +39,14 @@ import java.util.UUID;
 @io.swagger.v3.oas.annotations.tags.Tag(name = "Auth", description = "인증 API (로그인/회원가입/토큰)")
 public class AuthController {
 
+    private static final String OAUTH_EXCHANGE_PREFIX = "oauth-exchange:";
+
     private final AppUserRepository users;
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
     private final TokenBlacklistService blacklist;
     private final RateLimitService rateLimit;
+    private final StringRedisTemplate redis;
 
     private final long refreshTtlSeconds;
     private final String refreshCookieName;
@@ -56,6 +60,7 @@ public class AuthController {
             TokenBlacklistService blacklist,
             RateLimitService rateLimit,
             PasswordEncoder encoder,
+            StringRedisTemplate redis,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName
     ) {
@@ -64,9 +69,36 @@ public class AuthController {
         this.jwt = jwt;
         this.blacklist = blacklist;
         this.rateLimit = rateLimit;
+        this.redis = redis;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.refreshCookieName = refreshCookieName;
         this.encoder = encoder;
+    }
+
+    /**
+     * Exchange a short-lived one-time code (handed out by OAuth2SuccessHandler in
+     * the redirect URL) for the actual access token. This keeps the access token
+     * out of the browser URL, server access logs, and Referer headers.
+     */
+    @PostMapping("/exchange")
+    public ResponseEntity<?> exchange(@RequestBody ExchangeReq req) {
+        if (req == null || req.getCode() == null || req.getCode().isBlank()) {
+            return ResponseEntity.status(400).body(new Msg("Missing code"));
+        }
+        String key = OAUTH_EXCHANGE_PREFIX + req.getCode();
+        String accessToken = redis.opsForValue().get(key);
+        if (accessToken == null) {
+            return ResponseEntity.status(401).body(new Msg("Invalid or expired code"));
+        }
+        // one-time use
+        redis.delete(key);
+        return ResponseEntity.ok(new RefreshRes(accessToken));
+    }
+
+    @Data
+    public static class ExchangeReq {
+        @NotBlank @Size(max = 100)
+        private String code;
     }
 
     @PostMapping("/login")
