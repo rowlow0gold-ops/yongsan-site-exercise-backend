@@ -19,6 +19,8 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
+import com.example.demo.auth.ClientIpResolver;
+import com.example.demo.auth.PasswordBreachChecker;
 import com.example.demo.auth.RateLimitService;
 import com.example.demo.auth.jwt.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
@@ -47,9 +49,14 @@ public class AuthController {
     private final TokenBlacklistService blacklist;
     private final RateLimitService rateLimit;
     private final StringRedisTemplate redis;
+    private final ClientIpResolver clientIpResolver;
+    private final PasswordBreachChecker passwordBreachChecker;
 
     private final long refreshTtlSeconds;
+    private final long accessTtlSeconds;
     private final String refreshCookieName;
+    private final String accessCookieName;
+    private final boolean cookieSecure;
 
     private final PasswordEncoder encoder;
 
@@ -61,8 +68,13 @@ public class AuthController {
             RateLimitService rateLimit,
             PasswordEncoder encoder,
             StringRedisTemplate redis,
+            ClientIpResolver clientIpResolver,
+            PasswordBreachChecker passwordBreachChecker,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
-            @Value("${app.jwt.refreshCookieName}") String refreshCookieName
+            @Value("${app.jwt.accessTtlSeconds}") long accessTtlSeconds,
+            @Value("${app.jwt.refreshCookieName}") String refreshCookieName,
+            @Value("${app.jwt.accessCookieName:access_token}") String accessCookieName,
+            @Value("${app.cookie.secure:true}") boolean cookieSecure
     ) {
         this.users = users;
         this.refreshTokens = refreshTokens;
@@ -70,9 +82,18 @@ public class AuthController {
         this.blacklist = blacklist;
         this.rateLimit = rateLimit;
         this.redis = redis;
+        this.clientIpResolver = clientIpResolver;
+        this.passwordBreachChecker = passwordBreachChecker;
         this.refreshTtlSeconds = refreshTtlSeconds;
+        this.accessTtlSeconds = accessTtlSeconds;
         this.refreshCookieName = refreshCookieName;
+        this.accessCookieName = accessCookieName;
+        this.cookieSecure = cookieSecure;
         this.encoder = encoder;
+    }
+
+    private String clientIp(HttpServletRequest req) {
+        return clientIpResolver.resolve(req);
     }
 
     /**
@@ -81,7 +102,7 @@ public class AuthController {
      * out of the browser URL, server access logs, and Referer headers.
      */
     @PostMapping("/exchange")
-    public ResponseEntity<?> exchange(@RequestBody ExchangeReq req) {
+    public ResponseEntity<?> exchange(@RequestBody ExchangeReq req, HttpServletResponse res) {
         if (req == null || req.getCode() == null || req.getCode().isBlank()) {
             return ResponseEntity.status(400).body(new Msg("Missing code"));
         }
@@ -92,7 +113,9 @@ public class AuthController {
         }
         // one-time use
         redis.delete(key);
-        return ResponseEntity.ok(new RefreshRes(accessToken));
+        // Deliver the access token via HttpOnly cookie — never expose it to JS.
+        setAccessCookie(res, accessToken, (int) accessTtlSeconds);
+        return ResponseEntity.ok(new Msg("OK"));
     }
 
     @Data
@@ -104,7 +127,7 @@ public class AuthController {
     @PostMapping("/login")
     public ResponseEntity<?> login(@Valid @RequestBody LoginReq req,
                                    HttpServletRequest httpReq, HttpServletResponse res) {
-        String ip = httpReq.getRemoteAddr();
+        String ip = clientIp(httpReq);
 
         if (!rateLimit.isAllowed(ip)) {
             long retryAfter = rateLimit.getRetryAfterSeconds(ip);
@@ -131,12 +154,24 @@ public class AuthController {
         refreshTokens.save(new RefreshToken(u.getId(), refreshHash, expiresAt));
 
         setRefreshCookie(res, rawRefresh, (int) refreshTtlSeconds);
+        setAccessCookie(res, accessToken, (int) accessTtlSeconds);
 
-        return ResponseEntity.ok(new LoginRes(accessToken, new UserRes(u)));
+        // Note: access token is no longer in the response body — it's in an
+        // HttpOnly cookie. JS can read the user info, never the token itself.
+        return ResponseEntity.ok(new UserRes(u));
     }
 
     @PostMapping("/refresh")
     public ResponseEntity<?> refresh(HttpServletRequest req, HttpServletResponse res) {
+        // 30 refreshes / minute / IP — enough headroom for a legitimate
+        // multi-tab user, low enough to make brute-force pointless.
+        String ip = clientIp(req);
+        if (!rateLimit.tryAcquire("refresh:" + ip, 30, Duration.ofMinutes(1))) {
+            return ResponseEntity.status(429)
+                    .header("Retry-After", "60")
+                    .body(new Msg("Too many refresh attempts."));
+        }
+
         String raw = readCookie(req, refreshCookieName).orElse(null);
         if (raw == null) return ResponseEntity.status(401).body(new Msg("No refresh cookie"));
 
@@ -163,15 +198,22 @@ public class AuthController {
         setRefreshCookie(res, newRawRefresh, (int) refreshTtlSeconds);
 
         String newAccess = jwt.createAccessToken(u.getId(), u.getRole());
-        return ResponseEntity.ok(new RefreshRes(newAccess));
+        setAccessCookie(res, newAccess, (int) accessTtlSeconds);
+        return ResponseEntity.ok(new Msg("OK"));
     }
 
     @PostMapping("/logout")
     public ResponseEntity<?> logout(HttpServletRequest req, HttpServletResponse res) {
-        // Blacklist the access token in Redis
-        String authHeader = req.getHeader("Authorization");
-        if (authHeader != null && authHeader.startsWith("Bearer ")) {
-            String accessToken = authHeader.substring(7);
+        // Blacklist the access token in Redis. Prefer the cookie; fall back to
+        // the legacy Authorization header for any still-cached pre-cookie clients.
+        String accessToken = readCookie(req, accessCookieName).orElse(null);
+        if (accessToken == null) {
+            String authHeader = req.getHeader("Authorization");
+            if (authHeader != null && authHeader.startsWith("Bearer ")) {
+                accessToken = authHeader.substring(7);
+            }
+        }
+        if (accessToken != null) {
             try {
                 Claims claims = jwt.parse(accessToken).getBody();
                 Date exp = claims.getExpiration();
@@ -192,6 +234,7 @@ public class AuthController {
         });
 
         clearRefreshCookie(res);
+        clearAccessCookie(res);
         return ResponseEntity.ok(new Msg("OK"));
     }
 
@@ -204,14 +247,26 @@ public class AuthController {
     }
 
     private void setRefreshCookie(HttpServletResponse res, String value, int maxAgeSeconds) {
-        // For local dev (http://localhost), SameSite=Lax usually works if same-site.
-        // If you deploy FE/BE on different domains, you’ll need SameSite=None; Secure (HTTPS).
-        String cookie = refreshCookieName + "=" + value
-                + "; Path=/"
-                + "; HttpOnly"
-                + "; Max-Age=" + maxAgeSeconds
-                + "; SameSite=Lax";
-        res.addHeader("Set-Cookie", cookie);
+        writeCookie(res, refreshCookieName, value, maxAgeSeconds);
+    }
+
+    private void setAccessCookie(HttpServletResponse res, String value, int maxAgeSeconds) {
+        writeCookie(res, accessCookieName, value, maxAgeSeconds);
+    }
+
+    private void clearAccessCookie(HttpServletResponse res) {
+        writeCookie(res, accessCookieName, "", 0);
+    }
+
+    private void writeCookie(HttpServletResponse res, String name, String value, int maxAgeSeconds) {
+        StringBuilder sb = new StringBuilder()
+                .append(name).append('=').append(value)
+                .append("; Path=/")
+                .append("; HttpOnly")
+                .append("; Max-Age=").append(maxAgeSeconds)
+                .append("; SameSite=Lax");
+        if (cookieSecure) sb.append("; Secure");
+        res.addHeader("Set-Cookie", sb.toString());
     }
 
     private void clearRefreshCookie(HttpServletResponse res) {
@@ -247,8 +302,8 @@ public class AuthController {
         private String password;
     }
 
-    public record LoginRes(String accessToken, UserRes user) {}
-    public record RefreshRes(String accessToken) {}
+    // (LoginRes and RefreshRes were removed: the access token is now delivered
+    // via an HttpOnly cookie, not in the response body.)
     public record Msg(String message) {}
 
     public record UserRes(Long id, String email, String role, String name) {
@@ -256,19 +311,37 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    public ResponseEntity<?> signup(@Valid @RequestBody SignupReq req) {
-        String email = req.getEmail().trim().toLowerCase();
-
-        if (users.findByEmail(email).isPresent()) {
-            return ResponseEntity.badRequest().body(new Msg("Email already exists"));
+    public ResponseEntity<?> signup(@Valid @RequestBody SignupReq req, HttpServletRequest httpReq) {
+        // 10 signups / 10 minutes / IP — enough for legitimate retries on
+        // validation errors, low enough to make account-creation flooding hurt.
+        String ip = clientIp(httpReq);
+        if (!rateLimit.tryAcquire("signup:" + ip, 10, Duration.ofMinutes(10))) {
+            return ResponseEntity.status(429)
+                    .header("Retry-After", "600")
+                    .body(new Msg("Too many signup attempts. Try again later."));
         }
 
-        AppUser u = new AppUser();
-        u.setEmail(email);
-        u.setName(req.getName());
-        u.setRole("USER");
-        u.setPasswordHash(encoder.encode(req.getPassword()));
-        users.save(u);
+        // The password-breach check is the one error we surface directly: this
+        // is feedback the user can act on (pick a different password), and it
+        // doesn't reveal anything about existing accounts.
+        if (passwordBreachChecker.isBreached(req.getPassword())) {
+            return ResponseEntity.badRequest()
+                    .body(new Msg("This password appears in known data breaches. Please choose another."));
+        }
+
+        String email = req.getEmail().trim().toLowerCase();
+
+        // Reply with the same body whether or not the email already exists, so
+        // attackers can't probe which addresses are registered. We only persist
+        // when the address is new.
+        if (users.findByEmail(email).isEmpty()) {
+            AppUser u = new AppUser();
+            u.setEmail(email);
+            u.setName(req.getName());
+            u.setRole("USER");
+            u.setPasswordHash(encoder.encode(req.getPassword()));
+            users.save(u);
+        }
 
         return ResponseEntity.ok(new Msg("OK"));
     }

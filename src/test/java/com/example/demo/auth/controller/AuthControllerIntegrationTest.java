@@ -18,6 +18,7 @@ import org.springframework.web.context.WebApplicationContext;
 
 import java.util.Map;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -39,7 +40,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.security.oauth2.client.registration.google.client-secret=test",
         "spring.security.oauth2.client.registration.google.scope=email,profile",
         "spring.data.redis.host=localhost",
-        "spring.data.redis.port=6379"
+        "spring.data.redis.port=6379",
+        // Don't hit the real HIBP service from tests; assume all passwords are safe.
+        "app.security.passwordBreachCheck=false",
+        // Tests don't run over HTTPS, so don't set the Secure cookie flag
+        // (browsers would silently drop the cookie and tests would fail mysteriously).
+        "app.cookie.secure=false"
 })
 class AuthControllerIntegrationTest {
 
@@ -74,7 +80,7 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
-    @DisplayName("POST /auth/signup — duplicate email returns 400")
+    @DisplayName("POST /auth/signup — duplicate email returns generic OK (no enumeration)")
     void signupDuplicateEmail() throws Exception {
         AppUser u = new AppUser();
         u.setEmail("dup@example.com");
@@ -83,6 +89,8 @@ class AuthControllerIntegrationTest {
         u.setPasswordHash(encoder.encode("password123"));
         userRepo.save(u);
 
+        // Server must NOT reveal that the email already exists; the response
+        // looks identical to a fresh signup. This kills email enumeration.
         mvc.perform(post("/auth/signup")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(mapper.writeValueAsString(Map.of(
@@ -90,8 +98,12 @@ class AuthControllerIntegrationTest {
                                 "email", "dup@example.com",
                                 "password", "password123"
                         ))))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message").value("Email already exists"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.message").value("OK"));
+
+        // And the existing user record must not have been overwritten.
+        AppUser still = userRepo.findByEmail("dup@example.com").orElseThrow();
+        assert "existing".equals(still.getName()) : "duplicate signup must not overwrite existing user";
     }
 
     @Test
@@ -139,9 +151,10 @@ class AuthControllerIntegrationTest {
                                 "password", "password123"
                         ))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.accessToken").isNotEmpty())
-                .andExpect(jsonPath("$.user.email").value("login@example.com"))
-                .andExpect(jsonPath("$.user.role").value("USER"));
+                // Access token is now delivered via HttpOnly cookie, not in body.
+                .andExpect(header().exists("Set-Cookie"))
+                .andExpect(jsonPath("$.email").value("login@example.com"))
+                .andExpect(jsonPath("$.role").value("USER"));
     }
 
     @Test
@@ -190,7 +203,10 @@ class AuthControllerIntegrationTest {
     @Test
     @DisplayName("POST /auth/logout — returns OK")
     void logoutSuccess() throws Exception {
-        mvc.perform(post("/auth/logout"))
+        // /auth/logout is a cookie-bearing state-changing endpoint — CSRF
+        // protection applies. spring-security-test's csrf() postprocessor
+        // injects a valid token for the test.
+        mvc.perform(post("/auth/logout").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.message").value("OK"));
     }

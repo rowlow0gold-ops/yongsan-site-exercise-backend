@@ -23,6 +23,7 @@ import org.springframework.web.context.WebApplicationContext;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -106,6 +107,7 @@ class BoardPostControllerIntegrationTest {
         @DisplayName("POST /api/boards/board1/posts — guest post with password")
         void createGuestPost() throws Exception {
             mvc.perform(post("/api/boards/board1/posts")
+                            .with(csrf())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(Map.of(
                                     "title", "Guest Praise",
@@ -121,6 +123,7 @@ class BoardPostControllerIntegrationTest {
         @DisplayName("POST /api/boards/board1/posts — guest post without password fails")
         void createGuestPostNoPassword() throws Exception {
             mvc.perform(post("/api/boards/board1/posts")
+                            .with(csrf())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(Map.of(
                                     "title", "No Password",
@@ -134,6 +137,7 @@ class BoardPostControllerIntegrationTest {
         @DisplayName("POST /api/boards/board1/posts — member post (no password needed)")
         void createMemberPost() throws Exception {
             mvc.perform(post("/api/boards/board1/posts")
+                            .with(csrf())
                             .header("Authorization", "Bearer " + accessToken)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(Map.of(
@@ -166,6 +170,7 @@ class BoardPostControllerIntegrationTest {
         @DisplayName("POST /api/boards/board2/posts — unauthenticated fails")
         void createWithoutLoginFails() throws Exception {
             mvc.perform(post("/api/boards/board2/posts")
+                            .with(csrf())
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(Map.of(
                                     "title", "Anon post",
@@ -179,6 +184,7 @@ class BoardPostControllerIntegrationTest {
         @DisplayName("POST /api/boards/board2/posts — authenticated succeeds")
         void createWithLoginSucceeds() throws Exception {
             mvc.perform(post("/api/boards/board2/posts")
+                            .with(csrf())
                             .header("Authorization", "Bearer " + accessToken)
                             .contentType(MediaType.APPLICATION_JSON)
                             .content(mapper.writeValueAsString(Map.of(
@@ -196,6 +202,7 @@ class BoardPostControllerIntegrationTest {
             BoardPost p = createPost("board2", "To Delete", testUser.getId());
 
             mvc.perform(delete("/api/boards/board2/posts/" + p.getId())
+                            .with(csrf())
                             .header("Authorization", "Bearer " + accessToken)
                             .contentType(MediaType.APPLICATION_JSON))
                     .andExpect(status().isOk());
