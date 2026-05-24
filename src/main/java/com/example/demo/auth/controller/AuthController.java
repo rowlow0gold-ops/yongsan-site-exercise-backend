@@ -261,16 +261,28 @@ public class AuthController {
         return ResponseEntity.ok(new UserRes(u));
     }
 
+    // Name of the JS-readable companion cookie that just carries the access
+    // token's expiry timestamp (unix millis). The token itself stays in an
+    // HttpOnly cookie — only the *expiry time* is exposed to JS so the SPA
+    // can render a countdown / session indicator.
+    private static final String ACCESS_EXP_COOKIE = "access_expires_at";
+
     private void setRefreshCookie(HttpServletResponse res, String value, int maxAgeSeconds) {
         writeCookie(res, refreshCookieName, value, maxAgeSeconds);
     }
 
     private void setAccessCookie(HttpServletResponse res, String value, int maxAgeSeconds) {
         writeCookie(res, accessCookieName, value, maxAgeSeconds);
+        // Companion expiry cookie: JS-readable, holds only the expiration
+        // timestamp (not the token). Lets UtilBar.vue render the countdown
+        // that broke when the access token moved to an HttpOnly cookie.
+        long expAtMs = Instant.now().plusSeconds(maxAgeSeconds).toEpochMilli();
+        writeReadableCookie(res, ACCESS_EXP_COOKIE, String.valueOf(expAtMs), maxAgeSeconds);
     }
 
     private void clearAccessCookie(HttpServletResponse res) {
         writeCookie(res, accessCookieName, "", 0);
+        writeReadableCookie(res, ACCESS_EXP_COOKIE, "", 0);
     }
 
     private void writeCookie(HttpServletResponse res, String name, String value, int maxAgeSeconds) {
@@ -278,6 +290,19 @@ public class AuthController {
                 .append(name).append('=').append(value)
                 .append("; Path=/")
                 .append("; HttpOnly")
+                .append("; Max-Age=").append(maxAgeSeconds)
+                .append("; SameSite=Lax");
+        if (cookieSecure) sb.append("; Secure");
+        res.addHeader("Set-Cookie", sb.toString());
+    }
+
+    // Same as writeCookie but WITHOUT HttpOnly — for the access_expires_at
+    // metadata cookie that the SPA reads to render the countdown. Value is
+    // a unix-millis timestamp; not a secret.
+    private void writeReadableCookie(HttpServletResponse res, String name, String value, int maxAgeSeconds) {
+        StringBuilder sb = new StringBuilder()
+                .append(name).append('=').append(value)
+                .append("; Path=/")
                 .append("; Max-Age=").append(maxAgeSeconds)
                 .append("; SameSite=Lax");
         if (cookieSecure) sb.append("; Secure");
