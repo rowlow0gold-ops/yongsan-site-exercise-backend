@@ -91,7 +91,20 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
         String finalEmail = email;
         String finalName = name;
 
-        AppUser user = users.findByEmail(finalEmail).orElseGet(() -> {
+        // SECURITY: never attach an OAuth login to an existing password-auth
+        // account by email alone. Without an email-verification step there's
+        // no proof the OAuth identity owns that mailbox — and for synthetic
+        // emails like "<kakao_id>@kakao.local" the address is trivially guessable,
+        // so an attacker could pre-register the account and wait. If the email
+        // is already taken by a non-OAuth user, refuse the login and surface
+        // an error to the SPA.
+        var existing = users.findByEmail(finalEmail);
+        if (existing.isPresent() && !"OAUTH2_NO_PASSWORD".equals(existing.get().getPasswordHash())) {
+            response.sendRedirect(redirectUri + "?error=email_taken");
+            return;
+        }
+
+        AppUser user = existing.orElseGet(() -> {
             AppUser newUser = new AppUser();
             newUser.setEmail(finalEmail);
             newUser.setName(finalName);

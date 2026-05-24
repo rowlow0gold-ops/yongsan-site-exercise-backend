@@ -105,8 +105,8 @@ public class SecurityConfig {
                         // --- Health is public; the rest of /actuator (metrics, prometheus, env, etc.) is ADMIN-only
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .requestMatchers("/actuator/**").hasRole("ADMIN")
-                        // --- API docs
-                        .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api-docs/**", "/v3/api-docs/**").permitAll()
+                        // --- API docs: ADMIN only (was permitAll; exposed every endpoint + DTO)
+                        .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/api-docs/**", "/v3/api-docs/**").hasRole("ADMIN")
                         // --- Public health probe (separate from /actuator/health for app-level checks)
                         .requestMatchers(HttpMethod.GET, "/api/health").permitAll()
                         // --- Spring's error dispatcher must be reachable so error responses render

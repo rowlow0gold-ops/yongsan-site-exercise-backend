@@ -177,10 +177,25 @@ public class AuthController {
 
         String hash = sha256Hex(raw);
 
-        RefreshToken rt = refreshTokens.findTopByTokenHashAndRevokedAtIsNull(hash)
-                .orElse(null);
-
+        // SECURITY: look up ANY row with this hash (including revoked) so we
+        // can detect refresh-token reuse. If a token that's already been
+        // rotated out is presented, treat it as a compromise: revoke every
+        // active refresh token for the user. This burns one legitimate login
+        // session but kills the attacker's stolen-token chain.
+        RefreshToken rt = refreshTokens.findTopByTokenHash(hash).orElse(null);
         if (rt == null) return ResponseEntity.status(401).body(new Msg("Invalid refresh"));
+
+        if (rt.getRevokedAt() != null) {
+            // Reuse detected — revoke all active tokens for this user.
+            for (RefreshToken active : refreshTokens.findAllByUserIdAndRevokedAtIsNull(rt.getUserId())) {
+                active.revokeNow();
+                refreshTokens.save(active);
+            }
+            clearRefreshCookie(res);
+            clearAccessCookie(res);
+            return ResponseEntity.status(401).body(new Msg("Session revoked. Please log in again."));
+        }
+
         if (rt.getExpiresAt().isBefore(LocalDateTime.now())) return ResponseEntity.status(401).body(new Msg("Refresh expired"));
 
         AppUser u = users.findById(rt.getUserId()).orElse(null);
@@ -331,10 +346,23 @@ public class AuthController {
 
         String email = req.getEmail().trim().toLowerCase();
 
+        // SECURITY: refuse any reserved/non-routable TLD (.local, .invalid, .test,
+        // .example, .localhost). These are synthetic addresses we generate for
+        // OAuth users that didn't share an email (e.g. "<kakao_id>@kakao.local").
+        // Allowing them through signup would let an attacker pre-claim a future
+        // OAuth user's account by guessing the provider ID. We respond with the
+        // same OK body either way so attackers can't enumerate the rule.
+        boolean reservedDomain = email.endsWith(".local")
+                || email.endsWith(".invalid")
+                || email.endsWith(".test")
+                || email.endsWith(".example")
+                || email.endsWith(".localhost")
+                || email.endsWith(".internal");
+
         // Reply with the same body whether or not the email already exists, so
         // attackers can't probe which addresses are registered. We only persist
-        // when the address is new.
-        if (users.findByEmail(email).isEmpty()) {
+        // when the address is new and the domain is routable.
+        if (!reservedDomain && users.findByEmail(email).isEmpty()) {
             AppUser u = new AppUser();
             u.setEmail(email);
             u.setName(req.getName());

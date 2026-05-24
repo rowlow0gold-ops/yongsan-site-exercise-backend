@@ -8,7 +8,6 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -19,12 +18,11 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Reads the access token from either:
- *   1) the HttpOnly access_token cookie (preferred — set by login/exchange/refresh)
- *   2) the Authorization: Bearer header (kept for backwards compatibility with
- *      any pre-cookie clients; can be removed once all clients have migrated)
- *
- * Cookie takes precedence when both are present.
+ * Reads the access token from the HttpOnly access_token cookie (set by
+ * login/exchange/refresh). The legacy Authorization: Bearer fallback was
+ * removed — every supported client uses the cookie path, and accepting a
+ * header-supplied JWT is just extra attack surface (e.g. for any XSS payload
+ * that managed to read a non-HttpOnly storage).
  */
 @Component
 public class JwtAuthFilter extends OncePerRequestFilter {
@@ -51,12 +49,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
 
         String token = readAccessCookie(request);
-        if (token == null) {
-            String header = request.getHeader(HttpHeaders.AUTHORIZATION);
-            if (header != null && header.startsWith("Bearer ")) {
-                token = header.substring(7);
-            }
-        }
 
         if (token != null) {
             try {
