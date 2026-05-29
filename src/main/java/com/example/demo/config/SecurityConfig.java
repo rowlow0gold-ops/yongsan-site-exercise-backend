@@ -61,7 +61,8 @@ public class SecurityConfig {
                                 "/auth/signup",
                                 "/auth/exchange",
                                 "/oauth2/**",
-                                "/login/oauth2/**"
+                                "/login/oauth2/**",
+                                "/api/webauthn/login/**"
                         )
                 )
                 .cors(cors -> cors.configurationSource(req -> {
