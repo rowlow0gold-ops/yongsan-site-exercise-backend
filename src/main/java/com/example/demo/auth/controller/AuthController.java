@@ -410,17 +410,17 @@ public class AuthController {
     private static final java.util.regex.Pattern PW_DIGIT  = java.util.regex.Pattern.compile("[0-9]");
     private static String passwordStrengthError(String pw) {
         if (pw == null || pw.length() < 12) {
-            return "Password must be at least 12 characters.";
+            return "비밀번호는 12자 이상이어야 합니다.";
         }
         if (pw.length() > 128) {
-            return "Password must be at most 128 characters.";
+            return "비밀번호는 128자 이하여야 합니다.";
         }
         if (!PW_LETTER.matcher(pw).find() || !PW_DIGIT.matcher(pw).find()) {
-            return "Password must contain at least one letter and one digit.";
+            return "영문자와 숫자를 모두 포함해야 합니다.";
         }
         // Reject all-same character / very low entropy passwords
         if (pw.matches("(.)\\1{5,}.*")) {
-            return "Password is too predictable.";
+            return "같은 문자가 너무 반복됩니다.";
         }
         return null;
     }
