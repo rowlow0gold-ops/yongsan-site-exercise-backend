@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -73,12 +74,17 @@ public class WebAuthnController {
         Long uid = AuthContext.userIdOrNull();
         if (uid == null) return ResponseEntity.status(401).body(Map.of("message", "Login required"));
         List<WebAuthnCredential> list = svc.list(uid);
-        return ResponseEntity.ok(list.stream().map(c -> Map.of(
-            "id", c.getId(),
-            "name", c.getName(),
-            "createdAt", c.getCreatedAt(),
-            "lastUsedAt", c.getLastUsedAt()
-        )).toList());
+        // Use LinkedHashMap (not Map.of) — Map.of throws NPE on null values,
+        // and lastUsedAt is null for a credential that hasn't been used to
+        // sign in yet. Order preserved for stable JSON output.
+        return ResponseEntity.ok(list.stream().map(c -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", c.getId());
+            m.put("name", c.getName());
+            m.put("createdAt", c.getCreatedAt());
+            m.put("lastUsedAt", c.getLastUsedAt());
+            return m;
+        }).toList());
     }
 
     @DeleteMapping("/credentials/{id}")
