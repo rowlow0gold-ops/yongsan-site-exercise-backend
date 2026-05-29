@@ -297,7 +297,10 @@ public class AuthController {
             return ResponseEntity.badRequest().body(java.util.Map.of("message", "email required"));
         }
         String ip = clientIpResolver.resolve(httpReq);
-        rateLimit.checkLogin(ip); // throws if over budget — reuse login bucket
+        // 30 probes / minute / IP — enough for normal use, blocks enumeration scrapers.
+        if (!rateLimit.tryAcquire("email-exists:" + ip, 30, Duration.ofMinutes(1))) {
+            return ResponseEntity.status(429).body(java.util.Map.of("message", "Too many requests"));
+        }
         boolean exists = users.findByEmail(req.email.trim()).isPresent();
         return ResponseEntity.ok(java.util.Map.of("exists", exists));
     }
