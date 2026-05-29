@@ -23,6 +23,7 @@ import com.example.demo.auth.ClientIpResolver;
 import com.example.demo.auth.PasswordBreachChecker;
 import com.example.demo.auth.RateLimitService;
 import com.example.demo.audit.AuditLog;
+import com.example.demo.captcha.TurnstileVerifier;
 import com.example.demo.auth.jwt.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -50,6 +51,7 @@ public class AuthController {
     private final TokenBlacklistService blacklist;
     private final RateLimitService rateLimit;
     private final AuditLog audit;
+    private final TurnstileVerifier turnstile;
     private final StringRedisTemplate redis;
     private final ClientIpResolver clientIpResolver;
     private final PasswordBreachChecker passwordBreachChecker;
@@ -69,6 +71,7 @@ public class AuthController {
             TokenBlacklistService blacklist,
             RateLimitService rateLimit,
             AuditLog audit,
+            TurnstileVerifier turnstile,
             PasswordEncoder encoder,
             StringRedisTemplate redis,
             ClientIpResolver clientIpResolver,
@@ -85,6 +88,7 @@ public class AuthController {
         this.blacklist = blacklist;
         this.rateLimit = rateLimit;
         this.audit = audit;
+        this.turnstile = turnstile;
         this.redis = redis;
         this.clientIpResolver = clientIpResolver;
         this.passwordBreachChecker = passwordBreachChecker;
@@ -389,6 +393,13 @@ public class AuthController {
                     .body(new Msg("Too many signup attempts. Try again later."));
         }
 
+        // Cloudflare Turnstile must pass — blocks automated abuse before
+        // we even look at the password.
+        if (!turnstile.verify(req.getCfTurnstileToken(), ip)) {
+            audit.record(null, "SIGNUP_TURNSTILE_FAILED", ip, false, null);
+            return ResponseEntity.status(403).body(new Msg("Captcha verification failed. Please reload and try again."));
+        }
+
         // Strength check (length + complexity) before the more expensive
         // remote breach lookup.
         String strengthError = passwordStrengthError(req.getPassword());
@@ -444,5 +455,9 @@ public class AuthController {
 
         @NotBlank @Size(min = 8, max = 100)
         private String password;
+
+        /** Cloudflare Turnstile widget token. Required. */
+        @NotBlank
+        private String cfTurnstileToken;
     }
 }
