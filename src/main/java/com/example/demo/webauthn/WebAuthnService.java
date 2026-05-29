@@ -1,7 +1,7 @@
 package com.example.demo.webauthn;
 
-import com.example.demo.auth.AppUser;
-import com.example.demo.auth.AppUserRepository;
+import com.example.demo.auth.entity.AppUser;
+import com.example.demo.auth.repository.AppUserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.webauthn4j.WebAuthnManager;
 import com.webauthn4j.data.*;

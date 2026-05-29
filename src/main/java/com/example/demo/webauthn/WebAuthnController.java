@@ -2,8 +2,8 @@ package com.example.demo.webauthn;
 
 import com.example.demo.auth.AuthContext;
 import com.example.demo.auth.jwt.JwtUtil;
-import com.example.demo.auth.AppUserRepository;
-import com.example.demo.auth.AppUser;
+import com.example.demo.auth.repository.AppUserRepository;
+import com.example.demo.auth.entity.AppUser;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
