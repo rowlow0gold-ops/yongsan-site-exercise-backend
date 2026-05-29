@@ -94,6 +94,10 @@ public class SecurityConfig {
                         .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup", "/auth/exchange").permitAll()
                         .requestMatchers("/auth/me").authenticated()
                         // --- Boards
+                        // --- WebAuthn (passkey) — anonymous can initiate + complete a login
+                        .requestMatchers(HttpMethod.POST, "/api/webauthn/login/start").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/webauthn/login/finish").permitAll()
+                        // register/start, register/finish, credentials, DELETE require auth (fall through)
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts").permitAll()
                         // Unlock endpoint for guest-private posts: password is the gate,
                         // not auth. Must be listed BEFORE the board2 catch-all rule below.
