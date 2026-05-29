@@ -98,8 +98,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts/**").authenticated()
                         .requestMatchers("/api/boards/board2/**").authenticated()
                         .requestMatchers("/api/boards/**").permitAll()
-                        // --- Satisfaction widget (guests submit anonymously)
-                        .requestMatchers(HttpMethod.POST, "/api/satisfaction").permitAll()
+                        // --- Satisfaction widget — login required (anti-bot via auth, not Turnstile)
+                        // .requestMatchers(HttpMethod.POST, "/api/satisfaction").permitAll()
                         // --- OAuth callback paths
                         .requestMatchers("/login/oauth2/**", "/oauth2/**").permitAll()
                         // --- Health is public; the rest of /actuator (metrics, prometheus, env, etc.) is ADMIN-only

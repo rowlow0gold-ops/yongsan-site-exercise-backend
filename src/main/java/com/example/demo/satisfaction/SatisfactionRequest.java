@@ -19,7 +19,4 @@ public class SatisfactionRequest {
     @Size(max = 200)
     private String feedback;
 
-    /** Cloudflare Turnstile widget token. Required. */
-    @NotBlank
-    private String cfTurnstileToken;
 }
