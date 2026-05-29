@@ -6,6 +6,7 @@ import com.example.demo.auth.RateLimitService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import com.example.demo.captcha.TurnstileVerifier;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -19,6 +20,7 @@ public class SatisfactionController {
 
     private final PageSatisfactionRepository repository;
     private final ClientIpResolver clientIpResolver;
+    private final TurnstileVerifier turnstile;
     private final RateLimitService rateLimit;
 
     @PostMapping
@@ -26,6 +28,9 @@ public class SatisfactionController {
             @Valid @RequestBody SatisfactionRequest req,
             HttpServletRequest httpReq
     ) {
+        if (!turnstile.verify(req.getCfTurnstileToken(), clientIpResolver.resolve(httpReq))) {
+            throw new IllegalArgumentException("Captcha verification failed. Please reload and try again.");
+        }
         String ip = clientIpResolver.resolve(httpReq);
 
         // 20 ratings / 10 minutes / IP — generous for legitimate use, kills bots.
