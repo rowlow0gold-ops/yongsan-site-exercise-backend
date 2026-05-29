@@ -60,6 +60,7 @@ public class SecurityConfig {
                                 "/auth/login",
                                 "/auth/signup",
                                 "/auth/exchange",
+                                "/auth/email-exists",
                                 "/oauth2/**",
                                 "/login/oauth2/**",
                                 "/api/webauthn/login/**"
@@ -92,7 +93,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         // --- Auth surface (no JWT needed to start a session)
-                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup", "/auth/exchange").permitAll()
+                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup", "/auth/exchange", "/auth/email-exists").permitAll()
                         .requestMatchers("/auth/me").authenticated()
                         // --- Boards
                         // --- WebAuthn (passkey) — anonymous can initiate + complete a login

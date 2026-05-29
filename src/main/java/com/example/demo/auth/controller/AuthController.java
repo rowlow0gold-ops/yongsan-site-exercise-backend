@@ -278,6 +278,36 @@ public class AuthController {
         return ResponseEntity.ok(new UserRes(u));
     }
 
+    /**
+     * Lightweight "does this email belong to a registered account?" probe used
+     * by the login dialog before kicking off WebAuthn / OAuth. Microsoft-style:
+     * we want to tell the user "no such account" up front instead of letting
+     * them attempt a passkey assertion that the server would silently swap
+     * for someone else's account.
+     *
+     * Note: this technically leaks email enumeration (anyone can enumerate
+     * which emails are registered). That's an accepted trade-off for the UX
+     * here — the same enumeration is possible via signup ("email taken")
+     * and OAuth. Rate-limited by `rateLimit` so brute-force is bounded.
+     */
+    @PostMapping("/email-exists")
+    public ResponseEntity<?> emailExists(@RequestBody EmailExistsReq req,
+                                         HttpServletRequest httpReq) {
+        if (req == null || req.email == null || req.email.isBlank()) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("message", "email required"));
+        }
+        String ip = clientIpResolver.resolve(httpReq);
+        rateLimit.checkLogin(ip); // throws if over budget — reuse login bucket
+        boolean exists = users.findByEmail(req.email.trim()).isPresent();
+        return ResponseEntity.ok(java.util.Map.of("exists", exists));
+    }
+
+    @Data
+    public static class EmailExistsReq {
+        @Email @NotBlank @Size(max = 254)
+        private String email;
+    }
+
     // Name of the JS-readable companion cookie that just carries the access
     // token's expiry timestamp (unix millis). The token itself stays in an
     // HttpOnly cookie — only the *expiry time* is exposed to JS so the SPA
