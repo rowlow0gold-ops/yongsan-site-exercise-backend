@@ -357,6 +357,27 @@ public class AuthController {
         public UserRes(AppUser u) { this(u.getId(), u.getEmail(), u.getRole(), u.getName()); }
     }
 
+    // Server-side strength enforcement. Frontend should also show these
+    // rules live, but we never trust the client.
+    private static final java.util.regex.Pattern PW_LETTER = java.util.regex.Pattern.compile("[A-Za-z]");
+    private static final java.util.regex.Pattern PW_DIGIT  = java.util.regex.Pattern.compile("[0-9]");
+    private static String passwordStrengthError(String pw) {
+        if (pw == null || pw.length() < 12) {
+            return "Password must be at least 12 characters.";
+        }
+        if (pw.length() > 128) {
+            return "Password must be at most 128 characters.";
+        }
+        if (!PW_LETTER.matcher(pw).find() || !PW_DIGIT.matcher(pw).find()) {
+            return "Password must contain at least one letter and one digit.";
+        }
+        // Reject all-same character / very low entropy passwords
+        if (pw.matches("(.)\\1{5,}.*")) {
+            return "Password is too predictable.";
+        }
+        return null;
+    }
+
     @PostMapping("/signup")
     public ResponseEntity<?> signup(@Valid @RequestBody SignupReq req, HttpServletRequest httpReq) {
         // 10 signups / 10 minutes / IP — enough for legitimate retries on
@@ -366,6 +387,13 @@ public class AuthController {
             return ResponseEntity.status(429)
                     .header("Retry-After", "600")
                     .body(new Msg("Too many signup attempts. Try again later."));
+        }
+
+        // Strength check (length + complexity) before the more expensive
+        // remote breach lookup.
+        String strengthError = passwordStrengthError(req.getPassword());
+        if (strengthError != null) {
+            return ResponseEntity.badRequest().body(new Msg(strengthError));
         }
 
         // The password-breach check is the one error we surface directly: this
