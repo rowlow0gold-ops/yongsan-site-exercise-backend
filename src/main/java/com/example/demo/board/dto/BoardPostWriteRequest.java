@@ -23,4 +23,8 @@ public class BoardPostWriteRequest {
 
     @Pattern(regexp = "PUBLIC|PRIVATE", message = "visibility must be PUBLIC or PRIVATE")
     private String visibility = "PUBLIC";
+
+    /** Cloudflare Turnstile widget token. Required on create. */
+    @NotBlank
+    private String cfTurnstileToken;
 }

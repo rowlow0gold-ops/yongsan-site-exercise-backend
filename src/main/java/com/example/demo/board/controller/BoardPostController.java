@@ -10,6 +10,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
+import com.example.demo.captcha.TurnstileVerifier;
+import com.example.demo.auth.ClientIpResolver;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.*;
@@ -23,6 +26,8 @@ import java.time.Duration;
 public class BoardPostController {
 
     private final BoardPostService service;
+    private final TurnstileVerifier turnstile;
+    private final ClientIpResolver clientIpResolver;
     private final ClientIpResolver clientIpResolver;
     private final RateLimitService rateLimit;
 
@@ -97,7 +102,13 @@ public class BoardPostController {
     public record PrivateErrorResponse(String message, boolean guestPost) {}
 
     @PostMapping
-    public IdResponse create(@PathVariable String boardKey, @Valid @RequestBody BoardPostWriteRequest req) {
+    public IdResponse create(@PathVariable String boardKey,
+                             @Valid @RequestBody BoardPostWriteRequest req,
+                             HttpServletRequest httpReq) {
+        String ip = clientIpResolver.resolve(httpReq);
+        if (!turnstile.verify(req.getCfTurnstileToken(), ip)) {
+            throw new IllegalArgumentException("Captcha verification failed. Please reload and try again.");
+        }
         Long id = service.create(boardKey, req);
         return new IdResponse(id);
     }

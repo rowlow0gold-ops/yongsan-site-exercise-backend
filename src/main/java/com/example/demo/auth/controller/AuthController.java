@@ -145,6 +145,12 @@ public class AuthController {
                     .body(new Msg("Too many login attempts. Try again in " + retryAfter + " seconds."));
         }
 
+        // Turnstile — verify the human-check token before doing any DB work.
+        if (!turnstile.verify(req.getCfTurnstileToken(), ip)) {
+            audit.record(null, "LOGIN_TURNSTILE_FAILED", ip, false, null);
+            return ResponseEntity.status(403).body(new Msg("Captcha verification failed. Please reload and try again."));
+        }
+
         String email = req.getEmail().trim().toLowerCase();
 
         AppUser u = users.findByEmail(email).orElse(null);
@@ -351,6 +357,10 @@ public class AuthController {
 
         @NotBlank @Size(max = 100)
         private String password;
+
+        /** Cloudflare Turnstile widget token. Required. */
+        @NotBlank
+        private String cfTurnstileToken;
     }
 
     // (LoginRes and RefreshRes were removed: the access token is now delivered
