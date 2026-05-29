@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 import com.example.demo.auth.ClientIpResolver;
 import com.example.demo.auth.PasswordBreachChecker;
 import com.example.demo.auth.RateLimitService;
+import com.example.demo.audit.AuditLog;
 import com.example.demo.auth.jwt.TokenBlacklistService;
 import io.jsonwebtoken.Claims;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -48,6 +49,7 @@ public class AuthController {
     private final JwtUtil jwt;
     private final TokenBlacklistService blacklist;
     private final RateLimitService rateLimit;
+    private final AuditLog audit;
     private final StringRedisTemplate redis;
     private final ClientIpResolver clientIpResolver;
     private final PasswordBreachChecker passwordBreachChecker;
@@ -66,6 +68,7 @@ public class AuthController {
             JwtUtil jwt,
             TokenBlacklistService blacklist,
             RateLimitService rateLimit,
+            AuditLog audit,
             PasswordEncoder encoder,
             StringRedisTemplate redis,
             ClientIpResolver clientIpResolver,
@@ -81,6 +84,7 @@ public class AuthController {
         this.jwt = jwt;
         this.blacklist = blacklist;
         this.rateLimit = rateLimit;
+        this.audit = audit;
         this.redis = redis;
         this.clientIpResolver = clientIpResolver;
         this.passwordBreachChecker = passwordBreachChecker;
@@ -131,6 +135,7 @@ public class AuthController {
 
         if (!rateLimit.isAllowed(ip)) {
             long retryAfter = rateLimit.getRetryAfterSeconds(ip);
+            audit.record(null, "LOGIN_RATELIMITED", ip, false, "retry_after=" + retryAfter);
             return ResponseEntity.status(429)
                     .header("Retry-After", String.valueOf(retryAfter))
                     .body(new Msg("Too many login attempts. Try again in " + retryAfter + " seconds."));
@@ -141,10 +146,12 @@ public class AuthController {
         AppUser u = users.findByEmail(email).orElse(null);
         if (u == null || !encoder.matches(req.getPassword(), u.getPasswordHash())) {
             rateLimit.recordFailure(ip);
+            audit.record(email, "LOGIN_FAILURE", ip, false, null);
             return ResponseEntity.status(401).body(new Msg("Invalid credentials"));
         }
 
         rateLimit.clearAttempts(ip);
+        audit.record(u.getEmail(), "LOGIN_SUCCESS", ip, true, null);
         String accessToken = jwt.createAccessToken(u.getId(), u.getRole());
 
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
