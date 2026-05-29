@@ -95,6 +95,9 @@ public class SecurityConfig {
                         .requestMatchers("/auth/me").authenticated()
                         // --- Boards
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts").permitAll()
+                        // Unlock endpoint for guest-private posts: password is the gate,
+                        // not auth. Must be listed BEFORE the board2 catch-all rule below.
+                        .requestMatchers(HttpMethod.POST, "/api/boards/*/posts/*/unlock").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/boards/board2/posts/**").authenticated()
                         .requestMatchers("/api/boards/board2/**").authenticated()
                         .requestMatchers("/api/boards/**").permitAll()
