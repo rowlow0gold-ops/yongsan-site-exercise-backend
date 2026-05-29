@@ -1,6 +1,7 @@
 package com.example.demo.board.controller;
 
 import com.example.demo.auth.ClientIpResolver;
+import com.example.demo.auth.AuthContext;
 import com.example.demo.auth.RateLimitService;
 import com.example.demo.board.dto.*;
 import com.example.demo.board.service.BoardPostService;
@@ -104,7 +105,10 @@ public class BoardPostController {
                              @Valid @RequestBody BoardPostWriteRequest req,
                              HttpServletRequest httpReq) {
         String ip = clientIpResolver.resolve(httpReq);
-        if (!turnstile.verify(req.getCfTurnstileToken(), ip)) {
+        // Turnstile only required for anonymous (guest) posts. Logged-in users
+        // are already gated by JWT auth, so no captcha needed.
+        if (AuthContext.userIdOrNull() == null
+                && !turnstile.verify(req.getCfTurnstileToken(), ip)) {
             throw new IllegalArgumentException("Captcha verification failed. Please reload and try again.");
         }
         Long id = service.create(boardKey, req);
