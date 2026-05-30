@@ -1,7 +1,6 @@
 package com.example.demo.email;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
@@ -28,12 +27,12 @@ import java.util.Map;
  */
 @Service
 @Slf4j
-@RequiredArgsConstructor
 public class EmailService {
 
     private static final String RESEND_ENDPOINT = "https://api.resend.com/emails";
 
-    private final ObjectMapper json;
+    // Lightweight, thread-safe — fine to share across all calls.
+    private final ObjectMapper json = new ObjectMapper();
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))
             .build();
