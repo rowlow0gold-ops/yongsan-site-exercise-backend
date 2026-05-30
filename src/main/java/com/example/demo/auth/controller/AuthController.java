@@ -757,9 +757,15 @@ public class AuthController {
      *  render the form. Doesn't consume the token. Always 200; the body
      *  tells the SPA valid:true|false. */
     @PostMapping("/password-reset/validate")
-    public ResponseEntity<?> validateResetToken(@RequestBody VerifyReq req) {
+    public ResponseEntity<?> validateResetToken(@RequestBody PwResetValidateReq req) {
         boolean valid = req != null && passwordReset.isTokenValid(req.getToken());
         return ResponseEntity.ok(java.util.Map.of("valid", valid));
+    }
+
+    @Data
+    public static class PwResetValidateReq {
+        @NotBlank
+        private String token;
     }
 
     @Data
