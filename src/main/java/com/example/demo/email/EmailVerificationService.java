@@ -49,9 +49,12 @@ public class EmailVerificationService {
         java.time.Instant expiresAt = java.time.Instant.now().plus(TTL);
         redis.opsForValue().set(CODE_PREFIX + user.getId(), code, TTL);
         redis.delete(ATTEMPTS_PREFIX + user.getId()); // reset on resend
+        // Subject deliberately does NOT contain the code — putting OTP digits
+        // in the subject is a classic spam-filter trigger (and reveals the
+        // code in lock-screen notifications).
         email.sendHtml(
                 user.getEmail(),
-                "[테스트 홈페이지] 이메일 인증 코드: " + code,
+                "[테스트 홈페이지] 이메일 인증 안내",
                 EmailTemplates.verificationCode(user.getName(), code, (int) TTL.toMinutes())
         );
         return expiresAt;
