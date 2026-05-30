@@ -28,15 +28,22 @@ public class EmailVerifiedFilter extends OncePerRequestFilter {
 
     private final AppUserRepository users;
 
-    /** Exact URI prefixes that work even when the user isn't email-verified. */
+    /** Exact URI prefixes that work even when the user isn't email-verified.
+     *  Includes /auth/signup and /auth/login because the user might want to
+     *  create a different account or sign in elsewhere from an existing
+     *  unverified session — blocking those would leave them stranded. */
     private static final Set<String> ALLOWLIST_PREFIXES = Set.of(
             "/auth/me",
             "/auth/logout",
+            "/auth/login",           // user might want to switch accounts
+            "/auth/signup",          // user might want to create a different account
             "/auth/verify",          // /verify and /verify/resend
             "/auth/exchange",
             "/auth/refresh",
             "/auth/password-reset",  // they may need to recover
-            "/auth/email-exists"
+            "/auth/email-exists",
+            "/oauth2/",              // start of OAuth flows (Google/Kakao)
+            "/login/oauth2/"         // OAuth callbacks
     );
 
     @Override
