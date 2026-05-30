@@ -321,6 +321,38 @@ public class AuthController {
     }
 
     /**
+     * Profile update — only the display name is mutable from here. Email is
+     * the account identifier (changing it would need a re-verification flow);
+     * role / passwordHash / emailVerified are admin-or-system-managed.
+     */
+    @PatchMapping("/me")
+    public ResponseEntity<?> patchMe(org.springframework.security.core.Authentication auth,
+                                     @Valid @RequestBody UpdateMeReq req,
+                                     HttpServletRequest httpReq) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
+        AppUser u = users.findById(userId).orElse(null);
+        if (u == null) return ResponseEntity.status(404).body(new Msg("Account not found"));
+
+        if (req.name != null) {
+            String trimmed = req.name.trim();
+            if (trimmed.isEmpty() || trimmed.length() < 2 || trimmed.length() > 50) {
+                return ResponseEntity.badRequest().body(new Msg("이름은 2자 이상 50자 이하로 입력해주세요."));
+            }
+            u.setName(trimmed);
+        }
+        users.save(u);
+        audit.record(u.getEmail(), "PROFILE_UPDATED", clientIp(httpReq), true, "name");
+        return ResponseEntity.ok(new UserRes(u));
+    }
+
+    @Data
+    public static class UpdateMeReq {
+        @Size(min = 2, max = 50)
+        private String name;
+    }
+
+    /**
      * 탈퇴 — permanent account deletion. The caller must be authenticated;
      * we look up their email from the JWT principal, run the deletion
      * transaction, blacklist the current access token, revoke their refresh
