@@ -279,3 +279,4 @@ public class WebAuthnService {
         return new ServerProperty(new Origin(origin), rpId, challenge, null);
     }
 }
+
