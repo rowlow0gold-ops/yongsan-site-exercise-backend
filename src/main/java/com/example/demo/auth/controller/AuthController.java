@@ -597,28 +597,35 @@ public class AuthController {
         // Reply with the same body whether or not the email already exists, so
         // attackers can't probe which addresses are registered. We only persist
         // when the address is new and the domain is routable.
-        java.time.Instant verifyExp = null;
-        if (!reservedDomain && users.findByEmail(email).isEmpty()) {
-            AppUser u = new AppUser();
-            u.setEmail(email);
-            u.setName(req.getName());
-            u.setRole("USER");
-            u.setPasswordHash(encoder.encode(req.getPassword()));
-            u.setEmailVerified(false); // inert until they prove email control
-            AppUser saved = users.save(u);
-            verifyExp = emailVerification.sendVerificationEmail(saved);
-            audit.record(email, "SIGNUP_PENDING_VERIFICATION", ip, true, null);
+        // Reject reserved-domain synthetic emails outright. These addresses
+        // (e.g. <kakao_id>@kakao.local) are auto-minted for OAuth users who
+        // didn't share a real email — letting someone register one through
+        // signup would let them squat on a future OAuth user's account.
+        if (reservedDomain) {
+            return ResponseEntity.badRequest().body(new Msg("사용할 수 없는 이메일 도메인입니다."));
         }
 
-        // No cookies are minted here — until the user enters the 6-digit code
-        // they're a non-authenticated nobody. The response always includes the
-        // email + a verificationExpiresAt for the in-page countdown; if the
-        // email was a duplicate (or reserved), we still return a plausible
-        // future timestamp so the response shape doesn't leak the difference.
+        // Explicit duplicate check — trades email enumeration for UX clarity.
+        // (Earlier silent-OK design was confusing: user saw step 3 with a
+        // countdown but never got an email because we never sent one.)
+        if (users.findByEmail(email).isPresent()) {
+            audit.record(email, "SIGNUP_DUPLICATE", ip, false, null);
+            return ResponseEntity.status(409).body(new Msg("이미 가입된 이메일입니다. 로그인을 시도해주세요."));
+        }
+
+        AppUser u = new AppUser();
+        u.setEmail(email);
+        u.setName(req.getName());
+        u.setRole("USER");
+        u.setPasswordHash(encoder.encode(req.getPassword()));
+        u.setEmailVerified(false); // inert until they prove email control
+        AppUser saved = users.save(u);
+        java.time.Instant verifyExp = emailVerification.sendVerificationEmail(saved);
+        audit.record(email, "SIGNUP_PENDING_VERIFICATION", ip, true, null);
+
         java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
         body.put("email", email);
-        body.put("verificationExpiresAt",
-                (verifyExp != null ? verifyExp : java.time.Instant.now().plus(java.time.Duration.ofMinutes(10))).toString());
+        body.put("verificationExpiresAt", verifyExp.toString());
         body.put("message", "이메일로 보낸 6자리 인증 코드를 입력해 회원가입을 완료해주세요.");
         return ResponseEntity.ok(body);
     }
