@@ -585,27 +585,44 @@ public class AuthController {
     }
 
     /**
-     * Public endpoint hit by the verification link in the email. Always returns
-     * 200 with a small JSON body — the SPA's /verify route picks up the result.
+     * Authenticated endpoint — user submits the 6-digit code that landed in
+     * their inbox. Server checks against the per-user Redis entry. Returns
+     * the same shape as before so the SPA can show ok/error consistently.
      */
     @PostMapping("/verify")
-    public ResponseEntity<?> verifyEmail(@RequestBody VerifyReq req) {
-        if (req == null || req.token == null || req.token.isBlank()) {
-            return ResponseEntity.badRequest().body(java.util.Map.of("ok", false, "message", "토큰이 없습니다."));
+    public ResponseEntity<?> verifyEmail(@RequestBody VerifyReq req,
+                                         org.springframework.security.core.Authentication auth) {
+        if (auth == null) {
+            return ResponseEntity.status(401).body(java.util.Map.of("ok", false,
+                    "message", "로그인 후 인증을 진행해주세요."));
         }
-        Optional<Long> uid = emailVerification.consume(req.token);
-        if (uid.isEmpty()) {
-            return ResponseEntity.status(400).body(java.util.Map.of("ok", false,
-                    "message", "유효하지 않거나 만료된 인증 링크입니다."));
+        if (req == null || req.code == null || !req.code.matches("\\d{6}")) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("ok", false,
+                    "message", "6자리 숫자 코드를 입력해주세요."));
         }
-        users.findById(uid.get()).ifPresent(u -> audit.record(u.getEmail(), "EMAIL_VERIFIED", null, true, null));
-        return ResponseEntity.ok(java.util.Map.of("ok", true, "message", "이메일 인증 완료!"));
+        Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
+        var result = emailVerification.verify(userId, req.code);
+
+        return switch (result) {
+            case OK -> {
+                users.findById(userId).ifPresent(u ->
+                        audit.record(u.getEmail(), "EMAIL_VERIFIED", null, true, null));
+                yield ResponseEntity.ok(java.util.Map.of("ok", true,
+                        "message", "이메일 인증 완료!"));
+            }
+            case WRONG -> ResponseEntity.status(400).body(java.util.Map.of("ok", false,
+                    "message", "인증 코드가 올바르지 않습니다."));
+            case EXPIRED -> ResponseEntity.status(400).body(java.util.Map.of("ok", false,
+                    "message", "인증 코드가 만료되었습니다. 새 코드를 요청해주세요."));
+            case LOCKED -> ResponseEntity.status(429).body(java.util.Map.of("ok", false,
+                    "message", "잘못된 시도가 너무 많습니다. 새 인증 코드를 요청해주세요."));
+        };
     }
 
     @Data
     public static class VerifyReq {
         @NotBlank
-        private String token;
+        private String code;
     }
 
     /**

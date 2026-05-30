@@ -9,23 +9,31 @@ import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.Optional;
 
 /**
- * Email verification tokens, single-use, 24-hour TTL, stored in Redis
- * (no new DB table needed). Token is 256 random bits, base64url-encoded.
+ * 6-digit OTP-style email verification (Microsoft / Google pattern).
  *
- *   verify:<token>  ->  userId    TTL = 24h
+ * Why a 6-digit code instead of a magic link:
+ *  - Phishing-resistant: user retypes it, no clickable URL to spoof
+ *  - Cross-device: receive on phone, type on desktop
+ *  - Familiar UX from every modern product
  *
- * On verify we delete the token so it can't be replayed.
+ * Redis layout:
+ *   verify-code:<userId>      -> 6-digit code   TTL 10 min  (one active code per user)
+ *   verify-attempts:<userId>  -> int counter    TTL 10 min  (lockout after N wrong)
+ *
+ * Resending overwrites the code (and resets the counter), so an old code from
+ * a previous email instantly becomes useless.
  */
 @Service
 @RequiredArgsConstructor
 public class EmailVerificationService {
 
-    private static final String PREFIX = "verify:";
-    private static final Duration TTL = Duration.ofHours(24);
+    private static final String CODE_PREFIX = "verify-code:";
+    private static final String ATTEMPTS_PREFIX = "verify-attempts:";
+    private static final Duration TTL = Duration.ofMinutes(10);
+    private static final int MAX_ATTEMPTS = 10;
     private static final SecureRandom RNG = new SecureRandom();
 
     private final StringRedisTemplate redis;
@@ -36,37 +44,56 @@ public class EmailVerificationService {
     private String appBaseUrl;
 
     public void sendVerificationEmail(AppUser user) {
-        String token = newToken();
-        redis.opsForValue().set(PREFIX + token, String.valueOf(user.getId()), TTL);
-        String url = appBaseUrl.replaceAll("/+$", "") + "/verify?token=" + token;
+        String code = newCode();
+        redis.opsForValue().set(CODE_PREFIX + user.getId(), code, TTL);
+        redis.delete(ATTEMPTS_PREFIX + user.getId()); // reset on resend
         email.sendHtml(
                 user.getEmail(),
-                "[테스트 홈페이지] 이메일 인증을 완료해주세요",
-                EmailTemplates.verification(user.getName(), url)
+                "[테스트 홈페이지] 이메일 인증 코드: " + code,
+                EmailTemplates.verificationCode(user.getName(), code, (int) TTL.toMinutes())
         );
     }
 
-    /** Returns the userId the token belongs to (and marks the user verified), or empty if bad token. */
-    public Optional<Long> consume(String token) {
-        if (token == null || token.isBlank()) return Optional.empty();
-        String uidStr = redis.opsForValue().get(PREFIX + token);
-        if (uidStr == null) return Optional.empty();
-        redis.delete(PREFIX + token);
-        try {
-            Long uid = Long.parseLong(uidStr);
-            users.findById(uid).ifPresent(u -> {
-                u.setEmailVerified(true);
-                users.save(u);
-            });
-            return Optional.of(uid);
-        } catch (NumberFormatException e) {
-            return Optional.empty();
+    /**
+     * Validate the user-supplied code for the currently-authenticated user.
+     * Returns:
+     *   OK      — code matched; user is now email_verified=true
+     *   WRONG   — code didn't match (counter incremented)
+     *   EXPIRED — code TTL ran out (no active code in Redis for this user)
+     *   LOCKED  — too many wrong attempts; user must request a new code
+     */
+    public Result verify(Long userId, String code) {
+        if (userId == null || code == null || code.isBlank()) return Result.WRONG;
+        String trimmed = code.trim();
+
+        String attemptsStr = redis.opsForValue().get(ATTEMPTS_PREFIX + userId);
+        int attempts = attemptsStr == null ? 0 : Integer.parseInt(attemptsStr);
+        if (attempts >= MAX_ATTEMPTS) return Result.LOCKED;
+
+        String expected = redis.opsForValue().get(CODE_PREFIX + userId);
+        if (expected == null) return Result.EXPIRED;
+
+        if (!expected.equals(trimmed)) {
+            Long n = redis.opsForValue().increment(ATTEMPTS_PREFIX + userId);
+            if (n != null && n == 1L) redis.expire(ATTEMPTS_PREFIX + userId, TTL);
+            return Result.WRONG;
         }
+
+        // Match — burn the code + counter and flip the flag.
+        redis.delete(CODE_PREFIX + userId);
+        redis.delete(ATTEMPTS_PREFIX + userId);
+        users.findById(userId).ifPresent(u -> {
+            u.setEmailVerified(true);
+            users.save(u);
+        });
+        return Result.OK;
     }
 
-    private static String newToken() {
-        byte[] buf = new byte[32];
-        RNG.nextBytes(buf);
-        return Base64.getUrlEncoder().withoutPadding().encodeToString(buf);
+    private static String newCode() {
+        // Always exactly 6 digits, zero-padded if RNG yields a small number.
+        int n = RNG.nextInt(1_000_000);
+        return String.format("%06d", n);
     }
+
+    public enum Result { OK, WRONG, EXPIRED, LOCKED }
 }

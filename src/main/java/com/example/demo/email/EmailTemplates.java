@@ -11,6 +11,35 @@ public final class EmailTemplates {
 
     private EmailTemplates() {}
 
+    public static String verificationCode(String name, String code, int validMinutes) {
+        String safeName = escape(name == null || name.isBlank() ? "회원" : name);
+        // Space the digits for readability ("123 456")
+        String pretty = (code == null || code.length() != 6) ? escape(code)
+                : escape(code.substring(0, 3) + " " + code.substring(3));
+        return wrap("이메일 인증 코드",
+                "<h1 style=\"font-size:20px;margin:0 0 12px;\">안녕하세요, " + safeName + "님</h1>"
+                        + "<p style=\"margin:0 0 16px;color:#374151;\">"
+                        + "테스트 홈페이지 회원가입 인증 코드는 아래와 같습니다. "
+                        + "사이트의 인증 코드 입력란에 6자리 숫자를 입력해주세요."
+                        + "</p>"
+                        + "<div style=\"margin:24px 0;text-align:center;\">"
+                        + "<div style=\"display:inline-block;padding:18px 32px;background:#f5f7fa;border:1px solid #e5e7eb;"
+                        + "border-radius:10px;font-family:'Menlo','Consolas',monospace;font-size:32px;letter-spacing:8px;"
+                        + "font-weight:700;color:#2f5597;\">"
+                        + pretty
+                        + "</div>"
+                        + "</div>"
+                        + "<p style=\"margin:16px 0;font-size:13px;color:#6b7280;\">"
+                        + "이 코드는 <strong>" + validMinutes + "분</strong> 동안 유효합니다. "
+                        + "본인이 가입하지 않으셨다면 이 메일을 무시하셔도 됩니다."
+                        + "</p>"
+                        + "<p style=\"margin:16px 0;font-size:13px;color:#6b7280;\">"
+                        + "인증 코드를 절대 다른 사람에게 알려주지 마세요. "
+                        + "테스트 홈페이지가 먼저 인증 코드를 묻는 일은 없습니다."
+                        + "</p>"
+        );
+    }
+
     public static String verification(String name, String verifyUrl) {
         String safeName = escape(name == null || name.isBlank() ? "회원" : name);
         return wrap("이메일 인증",
