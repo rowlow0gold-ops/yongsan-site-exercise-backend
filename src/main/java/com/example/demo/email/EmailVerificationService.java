@@ -43,8 +43,10 @@ public class EmailVerificationService {
     @Value("${app.email.appBaseUrl}")
     private String appBaseUrl;
 
-    public void sendVerificationEmail(AppUser user) {
+    /** @return the wall-clock time when the newly-sent code will expire. */
+    public java.time.Instant sendVerificationEmail(AppUser user) {
         String code = newCode();
+        java.time.Instant expiresAt = java.time.Instant.now().plus(TTL);
         redis.opsForValue().set(CODE_PREFIX + user.getId(), code, TTL);
         redis.delete(ATTEMPTS_PREFIX + user.getId()); // reset on resend
         email.sendHtml(
@@ -52,6 +54,7 @@ public class EmailVerificationService {
                 "[테스트 홈페이지] 이메일 인증 코드: " + code,
                 EmailTemplates.verificationCode(user.getName(), code, (int) TTL.toMinutes())
         );
+        return expiresAt;
     }
 
     /**

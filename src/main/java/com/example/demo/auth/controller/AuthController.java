@@ -180,12 +180,13 @@ public class AuthController {
         // Don't mint any session. Send a fresh verification code and tell
         // the SPA it needs to collect one (it'll show the 6-digit input).
         if (!u.isEmailVerified()) {
-            emailVerification.sendVerificationEmail(u);
+            java.time.Instant verifyExp = emailVerification.sendVerificationEmail(u);
             audit.record(u.getEmail(), "LOGIN_NEEDS_VERIFICATION", ip, false, null);
             return ResponseEntity.status(403).body(java.util.Map.of(
                     "code", "EMAIL_NOT_VERIFIED",
                     "message", "이메일 인증이 필요합니다. 발송된 6자리 코드를 입력해주세요.",
-                    "email", u.getEmail()
+                    "email", u.getEmail(),
+                    "verificationExpiresAt", verifyExp.toString()
             ));
         }
 
@@ -596,6 +597,7 @@ public class AuthController {
         // Reply with the same body whether or not the email already exists, so
         // attackers can't probe which addresses are registered. We only persist
         // when the address is new and the domain is routable.
+        java.time.Instant verifyExp = null;
         if (!reservedDomain && users.findByEmail(email).isEmpty()) {
             AppUser u = new AppUser();
             u.setEmail(email);
@@ -604,14 +606,21 @@ public class AuthController {
             u.setPasswordHash(encoder.encode(req.getPassword()));
             u.setEmailVerified(false); // inert until they prove email control
             AppUser saved = users.save(u);
-            emailVerification.sendVerificationEmail(saved);
+            verifyExp = emailVerification.sendVerificationEmail(saved);
             audit.record(email, "SIGNUP_PENDING_VERIFICATION", ip, true, null);
         }
 
-        // No cookies are minted here. Until the user enters the 6-digit code
-        // they're a non-authenticated nobody. Same body whether new account,
-        // existing-verified, or reserved-domain — attackers can't enumerate.
-        return ResponseEntity.ok(new Msg("회원가입 요청을 받았습니다. 이메일로 보낸 6자리 인증 코드를 입력해 회원가입을 완료해주세요."));
+        // No cookies are minted here — until the user enters the 6-digit code
+        // they're a non-authenticated nobody. The response always includes the
+        // email + a verificationExpiresAt for the in-page countdown; if the
+        // email was a duplicate (or reserved), we still return a plausible
+        // future timestamp so the response shape doesn't leak the difference.
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("email", email);
+        body.put("verificationExpiresAt",
+                (verifyExp != null ? verifyExp : java.time.Instant.now().plus(java.time.Duration.ofMinutes(10))).toString());
+        body.put("message", "이메일로 보낸 6자리 인증 코드를 입력해 회원가입을 완료해주세요.");
+        return ResponseEntity.ok(body);
     }
 
     /**
@@ -696,23 +705,27 @@ public class AuthController {
     public ResponseEntity<?> resendVerification(@RequestBody PwResetRequestReq req,
                                                 HttpServletRequest httpReq) {
         String ip = clientIp(httpReq);
-        // 5/min/IP — covers an honest user retrying, blocks scrapers.
         if (!rateLimit.tryAcquire("verify-resend-ip:" + ip, 5, Duration.ofMinutes(1))) {
             return ResponseEntity.status(429).body(new Msg("잠시 후 다시 시도해주세요."));
         }
+        java.time.Instant verifyExp = null;
         if (req != null && req.email != null) {
             String email = req.email.trim().toLowerCase();
-            // 3/hour/email — keeps a malicious actor from flooding one mailbox.
             if (rateLimit.tryAcquire("verify-resend-email:" + email, 3, Duration.ofHours(1))) {
-                users.findByEmail(email).ifPresent(u -> {
-                    if (!u.isEmailVerified()) {
-                        emailVerification.sendVerificationEmail(u);
-                        audit.record(u.getEmail(), "VERIFY_RESEND", ip, true, null);
-                    }
-                });
+                var maybeUser = users.findByEmail(email);
+                if (maybeUser.isPresent() && !maybeUser.get().isEmailVerified()) {
+                    verifyExp = emailVerification.sendVerificationEmail(maybeUser.get());
+                    audit.record(email, "VERIFY_RESEND", ip, true, null);
+                }
             }
         }
-        return ResponseEntity.ok(new Msg("입력하신 이메일이 등록되어 있다면 새 인증 코드를 보냈습니다."));
+        // Always return a plausible expiresAt — keeps response shape uniform
+        // whether the email is registered, unverified, taken, or unknown.
+        java.util.Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("verificationExpiresAt",
+                (verifyExp != null ? verifyExp : java.time.Instant.now().plus(java.time.Duration.ofMinutes(10))).toString());
+        body.put("message", "입력하신 이메일이 등록되어 있다면 새 인증 코드를 보냈습니다.");
+        return ResponseEntity.ok(body);
     }
 
     /**
