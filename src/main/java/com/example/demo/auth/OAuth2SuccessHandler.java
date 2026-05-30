@@ -1,17 +1,21 @@
 package com.example.demo.auth;
 
 import com.example.demo.auth.entity.AppUser;
+import com.example.demo.auth.entity.OAuthIdentity;
 import com.example.demo.auth.entity.RefreshToken;
 import com.example.demo.auth.jwt.JwtUtil;
 import com.example.demo.auth.repository.AppUserRepository;
+import com.example.demo.auth.repository.OAuthIdentityRepository;
 import com.example.demo.auth.repository.RefreshTokenRepository;
 import com.example.demo.auth.session.SessionStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.oauth2.client.authentication.OAuth2AuthenticationToken;
 import org.springframework.security.oauth2.core.user.OAuth2User;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
@@ -25,6 +29,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @Component
+@Slf4j
 @RequiredArgsConstructor
 public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
 
@@ -32,6 +37,7 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
     private static final Duration EXCHANGE_TTL = Duration.ofSeconds(60);
 
     private final AppUserRepository users;
+    private final OAuthIdentityRepository oauthIdentities;
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
     private final StringRedisTemplate redis;
@@ -93,39 +99,82 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
         String finalEmail = email;
         String finalName = name;
 
-        // Account linking by verified email. If the user already has an
-        // account at this email (regardless of password vs OAuth signup),
-        // we sign them in to that account. The OAuth provider has just
-        // attested they control the address; for major providers (Google,
-        // Kakao) this is enforced by the provider's own verification, so
-        // it's safe. Pre-emptive "they signed up with password, refuse
-        // OAuth" was over-strict and silently broke legitimate users.
-        //
-        // The narrow case we still reject: a synthetic .local email
-        // (e.g. "<kakao_id>@kakao.local" we minted because Kakao didn't
-        // share the email). Those are guessable; if someone pre-registered
-        // such an address with a password, we can't trust the OAuth match.
-        var existing = users.findByEmail(finalEmail);
-        if (existing.isPresent() && finalEmail.endsWith(".local")
-                && !"OAUTH2_NO_PASSWORD".equals(existing.get().getPasswordHash())) {
-            response.sendRedirect(redirectUri + "?error=email_taken");
+        // Identify the provider + the provider's stable user id. Email is
+        // not a reliable identifier — it can change at the provider, and two
+        // different provider accounts can briefly share an email (this is
+        // exactly what caused the Kakao 4827954651 incident).
+        String provider = (authentication instanceof OAuth2AuthenticationToken token)
+                ? token.getAuthorizedClientRegistrationId()
+                : "unknown";
+        String providerUserId;
+        if ("google".equals(provider)) {
+            providerUserId = String.valueOf(oAuth2User.getAttribute("sub"));
+        } else if ("kakao".equals(provider)) {
+            Object kid = oAuth2User.getAttribute("id");
+            providerUserId = kid == null ? null : String.valueOf(kid);
+        } else {
+            providerUserId = oAuth2User.getName();
+        }
+
+        if (providerUserId == null || providerUserId.isBlank() || "null".equals(providerUserId)) {
+            log.warn("OAuth provider {} did not return a stable user id", provider);
+            response.sendRedirect(redirectUri + "?error=no_provider_id");
             return;
         }
 
-        AppUser user = existing.orElseGet(() -> {
-            AppUser newUser = new AppUser();
-            newUser.setEmail(finalEmail);
-            newUser.setName(finalName);
-            newUser.setRole("USER");
-            newUser.setPasswordHash("OAUTH2_NO_PASSWORD");
-            // OAuth providers (Google/Kakao) already proved email ownership
-            // on their side, so we trust their assertion and skip our own
-            // verification. Synthetic @kakao.local addresses are marked
-            // verified too — Kakao users authenticated via the provider,
-            // the email field is just our internal identifier.
-            newUser.setEmailVerified(true);
-            return users.save(newUser);
-        });
+        // 1) Fast path — identity already exists. (provider, providerUserId)
+        //    is the only key we trust as stable, so if it matches a row we
+        //    sign in that user immediately, no email lookup involved.
+        var existingIdentity = oauthIdentities.findByProviderAndProviderUserId(provider, providerUserId);
+        AppUser user;
+        if (existingIdentity.isPresent()) {
+            user = users.findById(existingIdentity.get().getUserId())
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Identity " + provider + ":" + providerUserId + " points at missing user"));
+        } else {
+            // 2) Email fallback — used for first-time OAuth login on either
+            //    a fresh user (no account yet) or an existing password user
+            //    that's now linking this provider. Synthetic .local emails
+            //    still refuse to link against a password-set account.
+            var existing = users.findByEmail(finalEmail);
+            if (existing.isPresent() && finalEmail.endsWith(".local")
+                    && !"OAUTH2_NO_PASSWORD".equals(existing.get().getPasswordHash())) {
+                response.sendRedirect(redirectUri + "?error=email_taken");
+                return;
+            }
+
+            user = existing.orElseGet(() -> {
+                AppUser newUser = new AppUser();
+                newUser.setEmail(finalEmail);
+                newUser.setName(finalName);
+                newUser.setRole("USER");
+                newUser.setPasswordHash("OAUTH2_NO_PASSWORD");
+                // OAuth providers (Google/Kakao) already proved email ownership
+                // on their side, so we trust their assertion and skip our own
+                // verification. Synthetic @kakao.local addresses are marked
+                // verified too — Kakao users authenticated via the provider,
+                // the email field is just our internal identifier.
+                newUser.setEmailVerified(true);
+                return users.save(newUser);
+            });
+
+            // 3) Reject duplicate-provider hijack. If this AppUser already
+            //    has an identity for the SAME provider but a DIFFERENT
+            //    providerUserId, two distinct provider accounts are trying
+            //    to converge through email — exactly the bug we're fixing.
+            //    Bail out instead of silently merging.
+            var sameProviderIdentities = oauthIdentities.findAllByUserIdAndProvider(user.getId(), provider);
+            if (!sameProviderIdentities.isEmpty()) {
+                log.warn("OAuth hijack guard: user {} already has {} identity for provider {}; refusing new providerUserId {}",
+                        user.getId(), sameProviderIdentities.size(), provider, providerUserId);
+                response.sendRedirect(redirectUri + "?error=email_taken");
+                return;
+            }
+
+            // 4) First-time linkage — record the identity so future logins
+            //    take the fast path and skip the email fallback entirely.
+            oauthIdentities.save(new OAuthIdentity(user.getId(), provider, providerUserId));
+        }
 
         String sid = sessions.create(user.getId());
         String accessToken = jwt.createAccessToken(user.getId(), user.getRole(), sid);
