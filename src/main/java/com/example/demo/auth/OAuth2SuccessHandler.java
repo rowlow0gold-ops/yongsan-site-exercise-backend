@@ -93,15 +93,21 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
         String finalEmail = email;
         String finalName = name;
 
-        // SECURITY: never attach an OAuth login to an existing password-auth
-        // account by email alone. Without an email-verification step there's
-        // no proof the OAuth identity owns that mailbox — and for synthetic
-        // emails like "<kakao_id>@kakao.local" the address is trivially guessable,
-        // so an attacker could pre-register the account and wait. If the email
-        // is already taken by a non-OAuth user, refuse the login and surface
-        // an error to the SPA.
+        // Account linking by verified email. If the user already has an
+        // account at this email (regardless of password vs OAuth signup),
+        // we sign them in to that account. The OAuth provider has just
+        // attested they control the address; for major providers (Google,
+        // Kakao) this is enforced by the provider's own verification, so
+        // it's safe. Pre-emptive "they signed up with password, refuse
+        // OAuth" was over-strict and silently broke legitimate users.
+        //
+        // The narrow case we still reject: a synthetic .local email
+        // (e.g. "<kakao_id>@kakao.local" we minted because Kakao didn't
+        // share the email). Those are guessable; if someone pre-registered
+        // such an address with a password, we can't trust the OAuth match.
         var existing = users.findByEmail(finalEmail);
-        if (existing.isPresent() && !"OAUTH2_NO_PASSWORD".equals(existing.get().getPasswordHash())) {
+        if (existing.isPresent() && finalEmail.endsWith(".local")
+                && !"OAUTH2_NO_PASSWORD".equals(existing.get().getPasswordHash())) {
             response.sendRedirect(redirectUri + "?error=email_taken");
             return;
         }

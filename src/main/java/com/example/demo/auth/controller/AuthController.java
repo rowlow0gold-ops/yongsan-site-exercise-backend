@@ -503,7 +503,8 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    public ResponseEntity<?> signup(@Valid @RequestBody SignupReq req, HttpServletRequest httpReq) {
+    public ResponseEntity<?> signup(@Valid @RequestBody SignupReq req, HttpServletRequest httpReq,
+                                    HttpServletResponse httpRes) {
         // 10 signups / 10 minutes / IP — enough for legitimate retries on
         // validation errors, low enough to make account-creation flooding hurt.
         String ip = clientIp(httpReq);
@@ -560,8 +561,26 @@ public class AuthController {
             AppUser saved = users.save(u);
             emailVerification.sendVerificationEmail(saved);
             audit.record(email, "SIGNUP_PENDING_VERIFICATION", ip, true, null);
+
+            // Mint session cookies inline (same shape as /auth/login) so the
+            // SPA doesn't have to round-trip a separate login that would need
+            // a Turnstile token we no longer collect on the signup form.
+            // The new account is email_verified=false; EmailVerifiedFilter
+            // restricts them to the verify allow-list anyway.
+            String sid = sessions.create(saved.getId());
+            String accessToken = jwt.createAccessToken(saved.getId(), saved.getRole(), sid);
+            String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
+            String refreshHash = sha256Hex(rawRefresh);
+            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(refreshTtlSeconds);
+            refreshTokens.save(new RefreshToken(saved.getId(), refreshHash, expiresAt));
+            setRefreshCookie(httpRes, rawRefresh, (int) refreshTtlSeconds);
+            setAccessCookie(httpRes, accessToken, (int) accessTtlSeconds);
+
+            return ResponseEntity.ok(new UserRes(saved));
         }
 
+        // Account already exists (or reserved domain) — same generic body
+        // so a probing attacker can't tell which case fired.
         return ResponseEntity.ok(new Msg("OK"));
     }
 
