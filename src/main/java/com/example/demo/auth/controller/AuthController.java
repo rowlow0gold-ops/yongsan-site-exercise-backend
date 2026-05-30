@@ -529,7 +529,7 @@ public class AuthController {
         // doesn't reveal anything about existing accounts.
         if (passwordBreachChecker.isBreached(req.getPassword())) {
             return ResponseEntity.badRequest()
-                    .body(new Msg("This password appears in known data breaches. Please choose another."));
+                    .body(new Msg("이미 유출된 적이 있는 비밀번호입니다. 다른 비밀번호를 선택해주세요. (영문/숫자/기호를 조합한 12자 이상을 권장)"));
         }
 
         String email = req.getEmail().trim().toLowerCase();
