@@ -176,6 +176,19 @@ public class AuthController {
             return ResponseEntity.status(401).body(new Msg("Invalid credentials"));
         }
 
+        // Credentials are correct but the account is not email-verified.
+        // Don't mint any session. Send a fresh verification code and tell
+        // the SPA it needs to collect one (it'll show the 6-digit input).
+        if (!u.isEmailVerified()) {
+            emailVerification.sendVerificationEmail(u);
+            audit.record(u.getEmail(), "LOGIN_NEEDS_VERIFICATION", ip, false, null);
+            return ResponseEntity.status(403).body(java.util.Map.of(
+                    "code", "EMAIL_NOT_VERIFIED",
+                    "message", "이메일 인증이 필요합니다. 발송된 6자리 코드를 입력해주세요.",
+                    "email", u.getEmail()
+            ));
+        }
+
         rateLimit.clearAttempts(ip);
         audit.record(u.getEmail(), "LOGIN_SUCCESS", ip, true, null);
         String sid = sessions.create(u.getId());
@@ -589,58 +602,72 @@ public class AuthController {
             u.setName(req.getName());
             u.setRole("USER");
             u.setPasswordHash(encoder.encode(req.getPassword()));
-            u.setEmailVerified(false); // password signup must verify
+            u.setEmailVerified(false); // inert until they prove email control
             AppUser saved = users.save(u);
             emailVerification.sendVerificationEmail(saved);
             audit.record(email, "SIGNUP_PENDING_VERIFICATION", ip, true, null);
-
-            // Mint session cookies inline (same shape as /auth/login) so the
-            // SPA doesn't have to round-trip a separate login that would need
-            // a Turnstile token we no longer collect on the signup form.
-            // The new account is email_verified=false; EmailVerifiedFilter
-            // restricts them to the verify allow-list anyway.
-            String sid = sessions.create(saved.getId());
-            String accessToken = jwt.createAccessToken(saved.getId(), saved.getRole(), sid);
-            String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
-            String refreshHash = sha256Hex(rawRefresh);
-            LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(refreshTtlSeconds);
-            refreshTokens.save(new RefreshToken(saved.getId(), refreshHash, expiresAt));
-            setRefreshCookie(httpRes, rawRefresh, (int) refreshTtlSeconds);
-            setAccessCookie(httpRes, accessToken, (int) accessTtlSeconds);
-
-            return ResponseEntity.ok(new UserRes(saved));
         }
 
-        // Account already exists (or reserved domain) — same generic body
-        // so a probing attacker can't tell which case fired.
-        return ResponseEntity.ok(new Msg("OK"));
+        // No cookies are minted here. Until the user enters the 6-digit code
+        // they're a non-authenticated nobody. Same body whether new account,
+        // existing-verified, or reserved-domain — attackers can't enumerate.
+        return ResponseEntity.ok(new Msg("회원가입 요청을 받았습니다. 이메일로 보낸 6자리 인증 코드를 입력해 회원가입을 완료해주세요."));
     }
 
     /**
-     * Authenticated endpoint — user submits the 6-digit code that landed in
-     * their inbox. Server checks against the per-user Redis entry. Returns
-     * the same shape as before so the SPA can show ok/error consistently.
+     * Public endpoint — anyone with the right email + code combo can verify
+     * AND get logged in atomically. This is the single bridge from the
+     * "not really a user" state created by signup into a real authenticated
+     * session.
+     *
+     * Flow: user signed up → got 6-digit code in email → tried to log in
+     * with password → server rejected with EMAIL_NOT_VERIFIED → SPA shows
+     * code input → POSTs here → cookies set, user record returned.
      */
     @PostMapping("/verify")
-    public ResponseEntity<?> verifyEmail(@RequestBody VerifyReq req,
-                                         org.springframework.security.core.Authentication auth) {
-        if (auth == null) {
-            return ResponseEntity.status(401).body(java.util.Map.of("ok", false,
-                    "message", "로그인 후 인증을 진행해주세요."));
-        }
-        if (req == null || req.code == null || !req.code.matches("\\d{6}")) {
+    public ResponseEntity<?> verifyEmail(@RequestBody VerifyReq req, HttpServletRequest httpReq,
+                                         HttpServletResponse httpRes) {
+        if (req == null || req.email == null || req.code == null
+                || req.email.isBlank() || !req.code.matches("\\d{6}")) {
             return ResponseEntity.badRequest().body(java.util.Map.of("ok", false,
                     "message", "6자리 숫자 코드를 입력해주세요."));
         }
-        Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
-        var result = emailVerification.verify(userId, req.code);
+        String ip = clientIp(httpReq);
+        // Same rate-limit bucket as login — prevents brute-forcing codes for
+        // arbitrary emails.
+        if (!rateLimit.tryAcquire("verify:" + ip, 30, Duration.ofMinutes(1))) {
+            return ResponseEntity.status(429).body(java.util.Map.of("ok", false,
+                    "message", "잠시 후 다시 시도해주세요."));
+        }
+
+        AppUser u = users.findByEmail(req.email.trim().toLowerCase()).orElse(null);
+        if (u == null) {
+            // Same response shape as WRONG so attackers can't enumerate which
+            // emails are registered.
+            return ResponseEntity.status(400).body(java.util.Map.of("ok", false,
+                    "message", "인증 코드가 올바르지 않습니다."));
+        }
+
+        var result = emailVerification.verify(u.getId(), req.code);
 
         return switch (result) {
             case OK -> {
-                users.findById(userId).ifPresent(u ->
-                        audit.record(u.getEmail(), "EMAIL_VERIFIED", null, true, null));
-                yield ResponseEntity.ok(java.util.Map.of("ok", true,
-                        "message", "이메일 인증 완료!"));
+                audit.record(u.getEmail(), "EMAIL_VERIFIED", ip, true, null);
+                // Mint a real session — this is the user's first authenticated
+                // moment. Same shape as /auth/login response.
+                String sid = sessions.create(u.getId());
+                String accessToken = jwt.createAccessToken(u.getId(), u.getRole(), sid);
+                String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
+                String refreshHash = sha256Hex(rawRefresh);
+                LocalDateTime expiresAt = LocalDateTime.now().plusSeconds(refreshTtlSeconds);
+                refreshTokens.save(new RefreshToken(u.getId(), refreshHash, expiresAt));
+                setRefreshCookie(httpRes, rawRefresh, (int) refreshTtlSeconds);
+                setAccessCookie(httpRes, accessToken, (int) accessTtlSeconds);
+                yield ResponseEntity.ok(java.util.Map.of(
+                        "ok", true,
+                        "message", "이메일 인증 완료!",
+                        "user", new UserRes(u)
+                ));
             }
             case WRONG -> ResponseEntity.status(400).body(java.util.Map.of("ok", false,
                     "message", "인증 코드가 올바르지 않습니다."));
@@ -653,30 +680,39 @@ public class AuthController {
 
     @Data
     public static class VerifyReq {
+        @Email @NotBlank @Size(max = 254)
+        private String email;
+
         @NotBlank
         private String code;
     }
 
     /**
-     * Authenticated user can request another verification email. Rate-limited
-     * to keep this from becoming a free spam vector.
+     * Public — anyone can request a fresh code to be sent to a given email.
+     * Always returns 200 with the same body so callers can't probe which
+     * emails are registered / unverified. Rate-limited per IP and per email.
      */
     @PostMapping("/verify/resend")
-    public ResponseEntity<?> resendVerification(org.springframework.security.core.Authentication auth,
+    public ResponseEntity<?> resendVerification(@RequestBody PwResetRequestReq req,
                                                 HttpServletRequest httpReq) {
-        if (auth == null) return ResponseEntity.status(401).build();
-        Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
-        AppUser u = users.findById(userId).orElse(null);
-        if (u == null) return ResponseEntity.status(404).body(new Msg("Account not found"));
-        if (u.isEmailVerified()) return ResponseEntity.ok(new Msg("이미 인증된 계정입니다."));
-
-        // 3 resends / hour / user — enough for retries, not enough for abuse.
-        if (!rateLimit.tryAcquire("verify-resend:" + userId, 3, Duration.ofHours(1))) {
+        String ip = clientIp(httpReq);
+        // 5/min/IP — covers an honest user retrying, blocks scrapers.
+        if (!rateLimit.tryAcquire("verify-resend-ip:" + ip, 5, Duration.ofMinutes(1))) {
             return ResponseEntity.status(429).body(new Msg("잠시 후 다시 시도해주세요."));
         }
-        emailVerification.sendVerificationEmail(u);
-        audit.record(u.getEmail(), "VERIFY_RESEND", clientIp(httpReq), true, null);
-        return ResponseEntity.ok(new Msg("인증 메일을 다시 보냈습니다."));
+        if (req != null && req.email != null) {
+            String email = req.email.trim().toLowerCase();
+            // 3/hour/email — keeps a malicious actor from flooding one mailbox.
+            if (rateLimit.tryAcquire("verify-resend-email:" + email, 3, Duration.ofHours(1))) {
+                users.findByEmail(email).ifPresent(u -> {
+                    if (!u.isEmailVerified()) {
+                        emailVerification.sendVerificationEmail(u);
+                        audit.record(u.getEmail(), "VERIFY_RESEND", ip, true, null);
+                    }
+                });
+            }
+        }
+        return ResponseEntity.ok(new Msg("입력하신 이메일이 등록되어 있다면 새 인증 코드를 보냈습니다."));
     }
 
     /**
