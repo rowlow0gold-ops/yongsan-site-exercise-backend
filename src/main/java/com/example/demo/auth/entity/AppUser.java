@@ -36,6 +36,16 @@ public class AppUser {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    /**
+     * False until the user clicks the verification link emailed at signup.
+     * OAuth sign-ups (Google/Kakao) are auto-verified — the provider has
+     * already proven ownership of the email. Password sign-ups start at
+     * false and the API enforces that nothing but a tiny allow-list of
+     * endpoints works until this flips to true.
+     */
+    @Column(name = "email_verified", nullable = false)
+    private boolean emailVerified = false;
+
     // ✅ ADD THIS
     @PrePersist
     public void onCreate() {

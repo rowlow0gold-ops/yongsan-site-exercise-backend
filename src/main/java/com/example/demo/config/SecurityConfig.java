@@ -2,6 +2,7 @@ package com.example.demo.config;
 
 import com.example.demo.auth.OAuth2SuccessHandler;
 import com.example.demo.auth.jwt.JwtAuthFilter;
+import com.example.demo.email.EmailVerifiedFilter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -43,7 +44,7 @@ public class SecurityConfig {
     }
 
     @Bean
-    SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter) throws Exception {
+    SecurityFilterChain filterChain(HttpSecurity http, JwtAuthFilter jwtAuthFilter, EmailVerifiedFilter emailVerifiedFilter) throws Exception {
         // CSRF: double-submit cookie pattern. Spring writes a non-HttpOnly
         // XSRF-TOKEN cookie that JS can read; the SPA's axios sends it back
         // as the X-XSRF-TOKEN header on state-changing requests. Endpoints
@@ -61,6 +62,8 @@ public class SecurityConfig {
                                 "/auth/signup",
                                 "/auth/exchange",
                                 "/auth/email-exists",
+                                "/auth/verify",
+                                "/auth/password-reset/**",
                                 "/oauth2/**",
                                 "/login/oauth2/**",
                                 "/api/webauthn/login/**"
@@ -93,7 +96,7 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         // --- Auth surface (no JWT needed to start a session)
-                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup", "/auth/exchange", "/auth/email-exists").permitAll()
+                        .requestMatchers("/auth/login", "/auth/refresh", "/auth/logout", "/auth/signup", "/auth/exchange", "/auth/email-exists", "/auth/verify", "/auth/password-reset/**").permitAll()
                         .requestMatchers("/auth/me").authenticated()
                         // --- Boards
                         // --- WebAuthn (passkey) — anonymous can initiate + complete a login
@@ -124,6 +127,10 @@ public class SecurityConfig {
                         .anyRequest().authenticated()
                 )
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                // Runs after JwtAuthFilter so we have the authenticated principal.
+                // Blocks every API call (except a small allow-list) when the
+                // user's email_verified flag is still false.
+                .addFilterAfter(emailVerifiedFilter, JwtAuthFilter.class)
                 // Materialise the CSRF token on every response so the SPA can
                 // read XSRF-TOKEN from any request, not just state-changing ones.
                 .addFilterAfter(new OncePerRequestFilter() {

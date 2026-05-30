@@ -24,6 +24,8 @@ import com.example.demo.auth.ClientIpResolver;
 import com.example.demo.auth.PasswordBreachChecker;
 import com.example.demo.auth.RateLimitService;
 import com.example.demo.auth.session.SessionStore;
+import com.example.demo.email.EmailVerificationService;
+import com.example.demo.email.PasswordResetService;
 import com.example.demo.audit.AuditLog;
 import com.example.demo.captcha.TurnstileVerifier;
 import com.example.demo.auth.jwt.TokenBlacklistService;
@@ -59,6 +61,8 @@ public class AuthController {
     private final PasswordBreachChecker passwordBreachChecker;
     private final AccountDeletionService accountDeletionService;
     private final SessionStore sessions;
+    private final EmailVerificationService emailVerification;
+    private final PasswordResetService passwordReset;
 
     private final long refreshTtlSeconds;
     private final long accessTtlSeconds;
@@ -82,6 +86,8 @@ public class AuthController {
             PasswordBreachChecker passwordBreachChecker,
             AccountDeletionService accountDeletionService,
             SessionStore sessions,
+            EmailVerificationService emailVerification,
+            PasswordResetService passwordReset,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.accessTtlSeconds}") long accessTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName,
@@ -100,6 +106,8 @@ public class AuthController {
         this.passwordBreachChecker = passwordBreachChecker;
         this.accountDeletionService = accountDeletionService;
         this.sessions = sessions;
+        this.emailVerification = emailVerification;
+        this.passwordReset = passwordReset;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.accessTtlSeconds = accessTtlSeconds;
         this.refreshCookieName = refreshCookieName;
@@ -469,8 +477,8 @@ public class AuthController {
     // via an HttpOnly cookie, not in the response body.)
     public record Msg(String message) {}
 
-    public record UserRes(Long id, String email, String role, String name) {
-        public UserRes(AppUser u) { this(u.getId(), u.getEmail(), u.getRole(), u.getName()); }
+    public record UserRes(Long id, String email, String role, String name, boolean emailVerified) {
+        public UserRes(AppUser u) { this(u.getId(), u.getEmail(), u.getRole(), u.getName(), u.isEmailVerified()); }
     }
 
     // Server-side strength enforcement. Frontend should also show these
@@ -548,10 +556,123 @@ public class AuthController {
             u.setName(req.getName());
             u.setRole("USER");
             u.setPasswordHash(encoder.encode(req.getPassword()));
-            users.save(u);
+            u.setEmailVerified(false); // password signup must verify
+            AppUser saved = users.save(u);
+            emailVerification.sendVerificationEmail(saved);
+            audit.record(email, "SIGNUP_PENDING_VERIFICATION", ip, true, null);
         }
 
         return ResponseEntity.ok(new Msg("OK"));
+    }
+
+    /**
+     * Public endpoint hit by the verification link in the email. Always returns
+     * 200 with a small JSON body — the SPA's /verify route picks up the result.
+     */
+    @PostMapping("/verify")
+    public ResponseEntity<?> verifyEmail(@RequestBody VerifyReq req) {
+        if (req == null || req.token == null || req.token.isBlank()) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("ok", false, "message", "토큰이 없습니다."));
+        }
+        Optional<Long> uid = emailVerification.consume(req.token);
+        if (uid.isEmpty()) {
+            return ResponseEntity.status(400).body(java.util.Map.of("ok", false,
+                    "message", "유효하지 않거나 만료된 인증 링크입니다."));
+        }
+        users.findById(uid.get()).ifPresent(u -> audit.record(u.getEmail(), "EMAIL_VERIFIED", null, true, null));
+        return ResponseEntity.ok(java.util.Map.of("ok", true, "message", "이메일 인증 완료!"));
+    }
+
+    @Data
+    public static class VerifyReq {
+        @NotBlank
+        private String token;
+    }
+
+    /**
+     * Authenticated user can request another verification email. Rate-limited
+     * to keep this from becoming a free spam vector.
+     */
+    @PostMapping("/verify/resend")
+    public ResponseEntity<?> resendVerification(org.springframework.security.core.Authentication auth,
+                                                HttpServletRequest httpReq) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
+        AppUser u = users.findById(userId).orElse(null);
+        if (u == null) return ResponseEntity.status(404).body(new Msg("Account not found"));
+        if (u.isEmailVerified()) return ResponseEntity.ok(new Msg("이미 인증된 계정입니다."));
+
+        // 3 resends / hour / user — enough for retries, not enough for abuse.
+        if (!rateLimit.tryAcquire("verify-resend:" + userId, 3, Duration.ofHours(1))) {
+            return ResponseEntity.status(429).body(new Msg("잠시 후 다시 시도해주세요."));
+        }
+        emailVerification.sendVerificationEmail(u);
+        audit.record(u.getEmail(), "VERIFY_RESEND", clientIp(httpReq), true, null);
+        return ResponseEntity.ok(new Msg("인증 메일을 다시 보냈습니다."));
+    }
+
+    /**
+     * Step 1 of forgot-password: anyone can hit this with an email; we ALWAYS
+     * return 200 so attackers can't probe which emails are registered.
+     */
+    @PostMapping("/password-reset/request")
+    public ResponseEntity<?> requestPasswordReset(@RequestBody PwResetRequestReq req, HttpServletRequest httpReq) {
+        String ip = clientIp(httpReq);
+        // 5 / hour / IP — covers honest retries, blocks scrapers.
+        if (!rateLimit.tryAcquire("pwreset-ip:" + ip, 5, Duration.ofHours(1))) {
+            return ResponseEntity.status(429).body(new Msg("잠시 후 다시 시도해주세요."));
+        }
+        if (req != null && req.email != null) {
+            String email = req.email.trim().toLowerCase();
+            // 3 / hour / email so a malicious actor can't flood one mailbox.
+            if (rateLimit.tryAcquire("pwreset-email:" + email, 3, Duration.ofHours(1))) {
+                passwordReset.sendResetEmail(email);
+                audit.record(email, "PWRESET_REQUEST", ip, true, null);
+            }
+        }
+        return ResponseEntity.ok(new Msg("입력하신 이메일이 등록되어 있다면 재설정 링크를 보내드립니다."));
+    }
+
+    @Data
+    public static class PwResetRequestReq {
+        @Email @NotBlank @Size(max = 254)
+        private String email;
+    }
+
+    /**
+     * Step 2 of forgot-password: SPA's /reset-password posts here with the
+     * token and the new password. Strength check identical to signup.
+     */
+    @PostMapping("/password-reset/confirm")
+    public ResponseEntity<?> confirmPasswordReset(@RequestBody PwResetConfirmReq req, HttpServletRequest httpReq) {
+        if (req == null || req.token == null || req.token.isBlank()
+                || req.newPassword == null || req.newPassword.isBlank()) {
+            return ResponseEntity.badRequest().body(new Msg("입력값이 올바르지 않습니다."));
+        }
+        String strengthError = passwordStrengthError(req.newPassword);
+        if (strengthError != null) {
+            return ResponseEntity.badRequest().body(new Msg(strengthError));
+        }
+        if (passwordBreachChecker.isBreached(req.newPassword)) {
+            return ResponseEntity.badRequest().body(new Msg(
+                    "유출된 이력이 있는 비밀번호입니다. 다른 비밀번호를 선택해주세요."));
+        }
+        String hash = passwordReset.getEncoder().encode(req.newPassword);
+        Optional<Long> uid = passwordReset.confirmReset(req.token, hash);
+        if (uid.isEmpty()) {
+            return ResponseEntity.status(400).body(new Msg("유효하지 않거나 만료된 재설정 링크입니다."));
+        }
+        users.findById(uid.get()).ifPresent(u -> audit.record(u.getEmail(), "PWRESET_CONFIRM", clientIp(httpReq), true, null));
+        return ResponseEntity.ok(new Msg("비밀번호가 재설정되었습니다. 새 비밀번호로 로그인해주세요."));
+    }
+
+    @Data
+    public static class PwResetConfirmReq {
+        @NotBlank
+        private String token;
+
+        @NotBlank @Size(min = 8, max = 128)
+        private String newPassword;
     }
 
     @Data
@@ -565,8 +686,8 @@ public class AuthController {
         @NotBlank @Size(min = 8, max = 100)
         private String password;
 
-        /** Cloudflare Turnstile widget token. Required. */
-        @NotBlank
+        // Turnstile field kept for backward compatibility with any in-flight
+        // clients that still send it — value is ignored.
         private String cfTurnstileToken;
     }
 }

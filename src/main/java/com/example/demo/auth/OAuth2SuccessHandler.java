@@ -112,6 +112,12 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
             newUser.setName(finalName);
             newUser.setRole("USER");
             newUser.setPasswordHash("OAUTH2_NO_PASSWORD");
+            // OAuth providers (Google/Kakao) already proved email ownership
+            // on their side, so we trust their assertion and skip our own
+            // verification. Synthetic @kakao.local addresses are marked
+            // verified too — Kakao users authenticated via the provider,
+            // the email field is just our internal identifier.
+            newUser.setEmailVerified(true);
             return users.save(newUser);
         });
 
