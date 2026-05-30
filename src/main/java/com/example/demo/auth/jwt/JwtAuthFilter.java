@@ -1,5 +1,6 @@
 package com.example.demo.auth.jwt;
 
+import com.example.demo.auth.session.SessionStore;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
 import jakarta.servlet.FilterChain;
@@ -29,15 +30,18 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwt;
     private final TokenBlacklistService blacklist;
+    private final SessionStore sessions;
     private final String accessCookieName;
 
     public JwtAuthFilter(
             JwtUtil jwt,
             TokenBlacklistService blacklist,
+            SessionStore sessions,
             @Value("${app.jwt.accessCookieName:access_token}") String accessCookieName
     ) {
         this.jwt = jwt;
         this.blacklist = blacklist;
+        this.sessions = sessions;
         this.accessCookieName = accessCookieName;
     }
 
@@ -59,8 +63,26 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 }
 
                 Jws<Claims> jws = jwt.parse(token);
-                String userId = jws.getBody().getSubject();
-                String role = String.valueOf(jws.getBody().get("role"));
+                Claims body = jws.getBody();
+                String userId = body.getSubject();
+                String role = String.valueOf(body.get("role"));
+                Object sidClaim = body.get("sid");
+                String sid = sidClaim == null ? null : String.valueOf(sidClaim);
+
+                // Authoritative session check. The JWT is cryptographically
+                // valid here, but if its sid is missing from Redis (because
+                // the user logged out, was kicked, deleted their account,
+                // or the session TTL expired) we refuse it.
+                //
+                // Legacy fallback: tokens minted before sid existed have
+                // sid=null. We grandfather those through until they expire
+                // naturally — within 60s of this deploy, every active JWT
+                // is a sid-bearing one.
+                if (sid != null && !sessions.isActive(sid)) {
+                    SecurityContextHolder.clearContext();
+                    filterChain.doFilter(request, response);
+                    return;
+                }
 
                 var auth = new UsernamePasswordAuthenticationToken(
                         userId,

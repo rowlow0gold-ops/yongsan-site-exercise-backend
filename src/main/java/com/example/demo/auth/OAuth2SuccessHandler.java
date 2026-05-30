@@ -5,6 +5,7 @@ import com.example.demo.auth.entity.RefreshToken;
 import com.example.demo.auth.jwt.JwtUtil;
 import com.example.demo.auth.repository.AppUserRepository;
 import com.example.demo.auth.repository.RefreshTokenRepository;
+import com.example.demo.auth.session.SessionStore;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +35,7 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
     private final RefreshTokenRepository refreshTokens;
     private final JwtUtil jwt;
     private final StringRedisTemplate redis;
+    private final SessionStore sessions;
 
     @Value("${app.jwt.refreshTtlSeconds}")
     private long refreshTtlSeconds;
@@ -113,7 +115,8 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
             return users.save(newUser);
         });
 
-        String accessToken = jwt.createAccessToken(user.getId(), user.getRole());
+        String sid = sessions.create(user.getId());
+        String accessToken = jwt.createAccessToken(user.getId(), user.getRole(), sid);
 
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
         String refreshHash = sha256Hex(rawRefresh);

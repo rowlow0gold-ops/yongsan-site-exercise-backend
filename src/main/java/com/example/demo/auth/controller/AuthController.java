@@ -23,6 +23,7 @@ import com.example.demo.auth.AccountDeletionService;
 import com.example.demo.auth.ClientIpResolver;
 import com.example.demo.auth.PasswordBreachChecker;
 import com.example.demo.auth.RateLimitService;
+import com.example.demo.auth.session.SessionStore;
 import com.example.demo.audit.AuditLog;
 import com.example.demo.captcha.TurnstileVerifier;
 import com.example.demo.auth.jwt.TokenBlacklistService;
@@ -57,6 +58,7 @@ public class AuthController {
     private final ClientIpResolver clientIpResolver;
     private final PasswordBreachChecker passwordBreachChecker;
     private final AccountDeletionService accountDeletionService;
+    private final SessionStore sessions;
 
     private final long refreshTtlSeconds;
     private final long accessTtlSeconds;
@@ -79,6 +81,7 @@ public class AuthController {
             ClientIpResolver clientIpResolver,
             PasswordBreachChecker passwordBreachChecker,
             AccountDeletionService accountDeletionService,
+            SessionStore sessions,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.accessTtlSeconds}") long accessTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName,
@@ -96,6 +99,7 @@ public class AuthController {
         this.clientIpResolver = clientIpResolver;
         this.passwordBreachChecker = passwordBreachChecker;
         this.accountDeletionService = accountDeletionService;
+        this.sessions = sessions;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.accessTtlSeconds = accessTtlSeconds;
         this.refreshCookieName = refreshCookieName;
@@ -166,7 +170,8 @@ public class AuthController {
 
         rateLimit.clearAttempts(ip);
         audit.record(u.getEmail(), "LOGIN_SUCCESS", ip, true, null);
-        String accessToken = jwt.createAccessToken(u.getId(), u.getRole());
+        String sid = sessions.create(u.getId());
+        String accessToken = jwt.createAccessToken(u.getId(), u.getRole(), sid);
 
         String rawRefresh = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID();
         String refreshHash = sha256Hex(rawRefresh);
@@ -233,7 +238,22 @@ public class AuthController {
         refreshTokens.save(new RefreshToken(u.getId(), newHash, newExpiresAt));
         setRefreshCookie(res, newRawRefresh, (int) refreshTtlSeconds);
 
-        String newAccess = jwt.createAccessToken(u.getId(), u.getRole());
+        // Carry the existing sid forward if the old access cookie still has one,
+        // so the user's session continues uninterrupted. Otherwise mint a fresh
+        // one (this also covers grandfathered pre-sid tokens during deploy).
+        String existingSid = readCookie(req, accessCookieName)
+                .map(t -> {
+                    try { return String.valueOf(jwt.parse(t).getBody().get("sid")); }
+                    catch (Exception e) { return null; }
+                })
+                .filter(s -> s != null && !s.equals("null") && !s.isEmpty())
+                .orElse(null);
+        String sid = (existingSid != null && sessions.isActive(existingSid))
+                ? existingSid
+                : sessions.create(u.getId());
+        sessions.extend(sid, u.getId());
+
+        String newAccess = jwt.createAccessToken(u.getId(), u.getRole(), sid);
         setAccessCookie(res, newAccess, (int) accessTtlSeconds);
         return ResponseEntity.ok(new Msg("OK"));
     }
@@ -255,6 +275,16 @@ public class AuthController {
                 Date exp = claims.getExpiration();
                 Duration remaining = Duration.between(Instant.now(), exp.toInstant());
                 blacklist.blacklist(accessToken, remaining);
+
+                // Kill the Redis session — JWTs already issued with this sid
+                // become inert the moment the next request hits JwtAuthFilter.
+                Object sidClaim = claims.get("sid");
+                Object subClaim = claims.getSubject();
+                if (sidClaim != null) {
+                    Long uid = null;
+                    try { uid = Long.parseLong(String.valueOf(subClaim)); } catch (Exception ignored2) {}
+                    sessions.invalidate(String.valueOf(sidClaim), uid);
+                }
             } catch (Exception ignored) {
                 // token already expired or invalid — no need to blacklist
             }

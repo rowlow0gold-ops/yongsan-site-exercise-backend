@@ -4,6 +4,7 @@ import com.example.demo.auth.AuthContext;
 import com.example.demo.auth.jwt.JwtUtil;
 import com.example.demo.auth.repository.AppUserRepository;
 import com.example.demo.auth.entity.AppUser;
+import com.example.demo.auth.session.SessionStore;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -23,6 +24,7 @@ public class WebAuthnController {
     private final WebAuthnService svc;
     private final JwtUtil jwt;
     private final AppUserRepository users;
+    private final SessionStore sessions;
 
     @Value("${app.jwt.accessTtlSeconds:60}")
     private long accessTtlSeconds;
@@ -55,7 +57,8 @@ public class WebAuthnController {
     public ResponseEntity<?> loginFinish(@RequestBody LoginFinishReq req, HttpServletResponse res) {
         Long uid = svc.loginFinish(req.credentialId(), req.challenge());
         AppUser u = users.findById(uid).orElseThrow();
-        String token = jwt.createAccessToken(u.getId(), u.getRole());
+        String sid = sessions.create(u.getId());
+        String token = jwt.createAccessToken(u.getId(), u.getRole(), sid);
         // Same cookie format as password login
         Cookie c = new Cookie("access_token", token);
         c.setHttpOnly(true);

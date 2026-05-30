@@ -24,17 +24,27 @@ public class JwtUtil {
         this.accessTtlSeconds = accessTtlSeconds;
     }
 
+    // Two-arg variant kept for any call site that doesn't have a session id yet
+    // (e.g. some legacy / test code). New callers should pass a sid so the
+    // server-side SessionStore can revoke the token before its JWT TTL is up.
     public String createAccessToken(Long userId, String role) {
+        return createAccessToken(userId, role, null);
+    }
+
+    public String createAccessToken(Long userId, String role, String sid) {
         Instant now = Instant.now();
         Instant exp = now.plusSeconds(accessTtlSeconds);
 
-        return Jwts.builder()
+        JwtBuilder b = Jwts.builder()
                 .setSubject(String.valueOf(userId))
                 .claim("role", role)
                 .setIssuedAt(Date.from(now))
                 .setExpiration(Date.from(exp))
-                .signWith(key, SignatureAlgorithm.HS256)
-                .compact();
+                .signWith(key, SignatureAlgorithm.HS256);
+
+        if (sid != null) b.claim("sid", sid);
+
+        return b.compact();
     }
 
     public Jws<Claims> parse(String token) {

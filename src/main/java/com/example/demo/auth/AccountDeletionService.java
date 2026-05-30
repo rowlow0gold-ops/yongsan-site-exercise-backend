@@ -2,6 +2,7 @@ package com.example.demo.auth;
 
 import com.example.demo.auth.repository.AppUserRepository;
 import com.example.demo.auth.repository.RefreshTokenRepository;
+import com.example.demo.auth.session.SessionStore;
 import com.example.demo.audit.AuditLog;
 import com.example.demo.board.repository.BoardPostRepository;
 import com.example.demo.satisfaction.PageSatisfactionRepository;
@@ -32,6 +33,7 @@ public class AccountDeletionService {
     private final WebAuthnCredentialRepository passkeys;
     private final BoardPostRepository posts;
     private final PageSatisfactionRepository satisfactions;
+    private final SessionStore sessions;
     private final AuditLog audit;
 
     @Transactional
@@ -44,16 +46,21 @@ public class AccountDeletionService {
         passkeys.deleteAllByUserId(userId);
         long surveys = satisfactions.deleteAllByUserId(userId);
 
+        // 2b. Kill every Redis session this user owns, so any still-valid
+        //     access tokens become inert on the next request.
+        int killedSessions = sessions.invalidateAllForUser(userId);
+
         // 3. Finally, the user row.
         users.deleteById(userId);
 
         // 4. Audit trail. Email is kept here because audit log is the
         //    legal record of "the user 탈퇴'd at this time" — independent
         //    of whether the user row still exists.
-        audit.record(userId, "ACCOUNT_DELETED", ip, true,
+        audit.record(email, "ACCOUNT_DELETED", ip, true,
                 "anonymized_posts=" + anonymized
                         + " refresh_tokens=" + refresh
                         + " surveys=" + surveys
+                        + " sessions=" + killedSessions
                         + " email=" + email);
     }
 }
