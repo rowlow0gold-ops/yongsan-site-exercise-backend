@@ -10,6 +10,8 @@ import com.webauthn4j.converter.util.ObjectConverter;
 import com.webauthn4j.credential.CredentialRecord;
 import com.webauthn4j.credential.CredentialRecordImpl;
 import com.webauthn4j.data.attestation.statement.AttestationStatement;
+import com.webauthn4j.data.AuthenticatorTransport;
+import com.webauthn4j.data.client.CollectedClientData;
 import com.webauthn4j.data.extension.authenticator.AuthenticationExtensionsAuthenticatorOutputs;
 import com.webauthn4j.data.extension.authenticator.RegistrationExtensionAuthenticatorOutput;
 import com.webauthn4j.data.extension.client.AuthenticationExtensionsClientOutputs;
@@ -223,9 +225,11 @@ public class WebAuthnService {
         // Rebuild the AttestedCredentialData from what we stored at registration,
         // wrap it in a CredentialRecord with the current sign-count.
         AttestedCredentialData attestedCredentialData = attestedCredentialDataConverter.convert(stored.getPublicKeyCose());
-        // webauthn4j 0.28.5: the 8-param constructor is
-        //   (AttestationStatement, Boolean, Boolean, Boolean, long,
-        //    AttestedCredentialData, authenticatorExtensions, clientExtensions)
+        // webauthn4j 0.28.5 — verified via class-file inspection — has a 10-param ctor:
+        //   (AttestationStatement, Boolean uvInitialized, Boolean backupEligible,
+        //    Boolean backupState, long counter, AttestedCredentialData,
+        //    authenticatorExtensions, CollectedClientData, clientExtensions,
+        //    Set<AuthenticatorTransport>)
         CredentialRecord credentialRecord = new CredentialRecordImpl(
                 (AttestationStatement) null,
                 (Boolean) null,                  // uvInitialized
@@ -234,7 +238,9 @@ public class WebAuthnService {
                 stored.getSignCount(),
                 attestedCredentialData,
                 (AuthenticationExtensionsAuthenticatorOutputs<RegistrationExtensionAuthenticatorOutput>) null,
-                (AuthenticationExtensionsClientOutputs<RegistrationExtensionClientOutput>) null
+                (CollectedClientData) null,
+                (AuthenticationExtensionsClientOutputs<RegistrationExtensionClientOutput>) null,
+                (Set<AuthenticatorTransport>) null
         );
 
         AuthenticationRequest authenticationRequest = new AuthenticationRequest(
