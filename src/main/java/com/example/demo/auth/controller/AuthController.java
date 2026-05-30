@@ -409,8 +409,8 @@ public class AuthController {
     private static final java.util.regex.Pattern PW_LETTER = java.util.regex.Pattern.compile("[A-Za-z]");
     private static final java.util.regex.Pattern PW_DIGIT  = java.util.regex.Pattern.compile("[0-9]");
     private static String passwordStrengthError(String pw) {
-        if (pw == null || pw.length() < 12) {
-            return "비밀번호는 12자 이상이어야 합니다.";
+        if (pw == null || pw.length() < 8) {
+            return "비밀번호는 8자 이상이어야 합니다.";
         }
         if (pw.length() > 128) {
             return "비밀번호는 128자 이하여야 합니다.";
@@ -436,12 +436,9 @@ public class AuthController {
                     .body(new Msg("Too many signup attempts. Try again later."));
         }
 
-        // Cloudflare Turnstile must pass — blocks automated abuse before
-        // we even look at the password.
-        if (!turnstile.verify(req.getCfTurnstileToken(), ip)) {
-            audit.record(null, "SIGNUP_TURNSTILE_FAILED", ip, false, null);
-            return ResponseEntity.status(403).body(new Msg("Captcha verification failed. Please reload and try again."));
-        }
+        // Turnstile removed from signup — rate-limit (10/10min/IP above) +
+        // email-verification (account inert until verified) carry the
+        // bot-protection load now.
 
         // Strength check (length + complexity) before the more expensive
         // remote breach lookup.
