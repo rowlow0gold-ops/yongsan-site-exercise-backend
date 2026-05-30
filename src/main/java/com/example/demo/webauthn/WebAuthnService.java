@@ -10,7 +10,6 @@ import com.webauthn4j.converter.util.ObjectConverter;
 import com.webauthn4j.credential.CredentialRecord;
 import com.webauthn4j.credential.CredentialRecordImpl;
 import com.webauthn4j.data.attestation.statement.AttestationStatement;
-import com.webauthn4j.data.AuthenticatorTransport;
 import com.webauthn4j.data.extension.authenticator.AuthenticationExtensionsAuthenticatorOutputs;
 import com.webauthn4j.data.extension.authenticator.RegistrationExtensionAuthenticatorOutput;
 import com.webauthn4j.data.extension.client.AuthenticationExtensionsClientOutputs;
@@ -224,9 +223,9 @@ public class WebAuthnService {
         // Rebuild the AttestedCredentialData from what we stored at registration,
         // wrap it in a CredentialRecord with the current sign-count.
         AttestedCredentialData attestedCredentialData = attestedCredentialDataConverter.convert(stored.getPublicKeyCose());
-        // Explicit casts so Java's overload resolution picks the right
-        // constructor — webauthn4j has multiple CredentialRecordImpl
-        // constructors and bare nulls are ambiguous to the compiler.
+        // webauthn4j 0.28.5: the 8-param constructor is
+        //   (AttestationStatement, Boolean, Boolean, Boolean, long,
+        //    AttestedCredentialData, authenticatorExtensions, clientExtensions)
         CredentialRecord credentialRecord = new CredentialRecordImpl(
                 (AttestationStatement) null,
                 (Boolean) null,                  // uvInitialized
@@ -235,8 +234,7 @@ public class WebAuthnService {
                 stored.getSignCount(),
                 attestedCredentialData,
                 (AuthenticationExtensionsAuthenticatorOutputs<RegistrationExtensionAuthenticatorOutput>) null,
-                (AuthenticationExtensionsClientOutputs<RegistrationExtensionClientOutput>) null,
-                (Set<AuthenticatorTransport>) null
+                (AuthenticationExtensionsClientOutputs<RegistrationExtensionClientOutput>) null
         );
 
         AuthenticationRequest authenticationRequest = new AuthenticationRequest(
