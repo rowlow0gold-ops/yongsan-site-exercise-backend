@@ -15,4 +15,5 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     // chain when a reuse is detected.
     List<RefreshToken> findAllByUserIdAndRevokedAtIsNull(Long userId);
     long deleteByExpiresAtBefore(LocalDateTime t);
+    long deleteAllByUserId(Long userId);
 }

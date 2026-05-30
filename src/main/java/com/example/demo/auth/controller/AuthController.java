@@ -19,6 +19,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 
+import com.example.demo.auth.AccountDeletionService;
 import com.example.demo.auth.ClientIpResolver;
 import com.example.demo.auth.PasswordBreachChecker;
 import com.example.demo.auth.RateLimitService;
@@ -55,6 +56,7 @@ public class AuthController {
     private final StringRedisTemplate redis;
     private final ClientIpResolver clientIpResolver;
     private final PasswordBreachChecker passwordBreachChecker;
+    private final AccountDeletionService accountDeletionService;
 
     private final long refreshTtlSeconds;
     private final long accessTtlSeconds;
@@ -76,6 +78,7 @@ public class AuthController {
             StringRedisTemplate redis,
             ClientIpResolver clientIpResolver,
             PasswordBreachChecker passwordBreachChecker,
+            AccountDeletionService accountDeletionService,
             @Value("${app.jwt.refreshTtlSeconds}") long refreshTtlSeconds,
             @Value("${app.jwt.accessTtlSeconds}") long accessTtlSeconds,
             @Value("${app.jwt.refreshCookieName}") String refreshCookieName,
@@ -92,6 +95,7 @@ public class AuthController {
         this.redis = redis;
         this.clientIpResolver = clientIpResolver;
         this.passwordBreachChecker = passwordBreachChecker;
+        this.accountDeletionService = accountDeletionService;
         this.refreshTtlSeconds = refreshTtlSeconds;
         this.accessTtlSeconds = accessTtlSeconds;
         this.refreshCookieName = refreshCookieName;
@@ -276,6 +280,41 @@ public class AuthController {
         Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
         AppUser u = users.findById(userId).orElseThrow();
         return ResponseEntity.ok(new UserRes(u));
+    }
+
+    /**
+     * 탈퇴 — permanent account deletion. The caller must be authenticated;
+     * we look up their email from the JWT principal, run the deletion
+     * transaction, blacklist the current access token, revoke their refresh
+     * cookie, and clear both cookies on the response so the next request
+     * comes in as anonymous.
+     */
+    @DeleteMapping("/me")
+    public ResponseEntity<?> deleteMe(org.springframework.security.core.Authentication auth,
+                                      HttpServletRequest req,
+                                      HttpServletResponse res) {
+        if (auth == null) return ResponseEntity.status(401).build();
+        Long userId = Long.valueOf(String.valueOf(auth.getPrincipal()));
+        AppUser u = users.findById(userId).orElse(null);
+        if (u == null) return ResponseEntity.status(404).body(new Msg("Account not found"));
+
+        String ip = clientIp(req);
+        accountDeletionService.deleteAccount(userId, u.getEmail(), ip);
+
+        // Blacklist the access token so it can't be reused while it's still
+        // within its TTL window.
+        readCookie(req, accessCookieName).ifPresent(token -> {
+            try {
+                Claims claims = jwt.parse(token).getBody();
+                Date exp = claims.getExpiration();
+                Duration remaining = Duration.between(Instant.now(), exp.toInstant());
+                blacklist.blacklist(token, remaining);
+            } catch (Exception ignored) {}
+        });
+
+        clearRefreshCookie(res);
+        clearAccessCookie(res);
+        return ResponseEntity.ok(new Msg("탈퇴 처리되었습니다."));
     }
 
     /**

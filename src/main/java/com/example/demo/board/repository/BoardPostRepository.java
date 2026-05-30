@@ -30,4 +30,18 @@ public interface BoardPostRepository extends JpaRepository<BoardPost, Long> {
 """)
     int incrementViews(@Param("boardKey") String boardKey, @Param("id") Long id);
 
+    /**
+     * Account-deletion (탈퇴) helper. Detaches a withdrawing user from their
+     * posts: keeps the content (community value) but drops attribution.
+     * The author display string becomes "탈퇴한 회원", FK to app_users is
+     * nulled, and the post can no longer be edited/deleted by anyone.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+  update BoardPost p
+  set p.authorUserId = null,
+      p.author       = '탈퇴한 회원'
+  where p.authorUserId = :userId
+""")
+    int anonymizePostsByUser(@Param("userId") Long userId);
 }
