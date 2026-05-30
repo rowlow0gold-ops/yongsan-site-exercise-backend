@@ -668,13 +668,30 @@ public class AuthController {
             return ResponseEntity.badRequest().body(new Msg(
                     "유출된 이력이 있는 비밀번호입니다. 다른 비밀번호를 선택해주세요."));
         }
+        // Snapshot the user BEFORE confirmReset wipes the token, so we can
+        // notify them by email afterwards.
+        Optional<AppUser> before = passwordReset.peekUser(req.token);
         String hash = passwordReset.getEncoder().encode(req.newPassword);
         Optional<Long> uid = passwordReset.confirmReset(req.token, hash);
         if (uid.isEmpty()) {
             return ResponseEntity.status(400).body(new Msg("유효하지 않거나 만료된 재설정 링크입니다."));
         }
-        users.findById(uid.get()).ifPresent(u -> audit.record(u.getEmail(), "PWRESET_CONFIRM", clientIp(httpReq), true, null));
+        // 5-minute cooldown — any further reset request for this user is no-oped
+        // until this expires. Keyed by user id, lives in Redis.
+        passwordReset.setResetCooldown(uid.get());
+        String ip = clientIp(httpReq);
+        before.ifPresent(u -> passwordReset.sendPasswordChangedNotification(u, ip));
+        users.findById(uid.get()).ifPresent(u -> audit.record(u.getEmail(), "PWRESET_CONFIRM", ip, true, null));
         return ResponseEntity.ok(new Msg("비밀번호가 재설정되었습니다. 새 비밀번호로 로그인해주세요."));
+    }
+
+    /** Cheap probe used by /reset-password on page load to decide whether to
+     *  render the form. Doesn't consume the token. Always 200; the body
+     *  tells the SPA valid:true|false. */
+    @PostMapping("/password-reset/validate")
+    public ResponseEntity<?> validateResetToken(@RequestBody VerifyReq req) {
+        boolean valid = req != null && passwordReset.isTokenValid(req.getToken());
+        return ResponseEntity.ok(java.util.Map.of("valid", valid));
     }
 
     @Data

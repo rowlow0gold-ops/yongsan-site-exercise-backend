@@ -34,6 +34,34 @@ public final class EmailTemplates {
         );
     }
 
+    /** Notification sent AFTER a password is successfully reset. No action
+     *  link inside — just a security alert so the user knows it happened. */
+    public static String passwordChangedNotification(String name, String when, String ip) {
+        String safeName = escape(name == null || name.isBlank() ? "회원" : name);
+        return wrap("비밀번호 변경 알림",
+                "<h1 style=\"font-size:20px;margin:0 0 12px;\">비밀번호가 변경되었습니다</h1>"
+                        + "<p style=\"margin:0 0 16px;color:#374151;\">"
+                        + safeName + "님의 계정 비밀번호가 방금 변경되었습니다."
+                        + "</p>"
+                        + "<table cellpadding=\"6\" cellspacing=\"0\" border=\"0\" "
+                        + "style=\"background:#f9fafb;border-radius:6px;margin:12px 0;font-size:13px;color:#374151;\">"
+                        + "<tr><td>일시</td><td>" + escape(when) + "</td></tr>"
+                        + "<tr><td>IP</td><td>" + escape(ip == null ? "(unknown)" : ip) + "</td></tr>"
+                        + "</table>"
+                        + "<p style=\"margin:16px 0;color:#dc2626;font-weight:600;\">"
+                        + "본인이 변경하지 않으셨다면 즉시 다음 조치를 취해주세요:"
+                        + "</p>"
+                        + "<ol style=\"color:#374151;padding-left:20px;margin:0 0 16px;\">"
+                        + "<li>다른 인증 수단(Google, Kakao, Passkey)으로 즉시 로그인</li>"
+                        + "<li>마이페이지에서 등록된 Passkey 확인</li>"
+                        + "<li>의심스러운 활동이 있다면 계정 탈퇴 진행</li>"
+                        + "</ol>"
+                        + "<p style=\"margin:16px 0;font-size:13px;color:#6b7280;\">"
+                        + "다른 모든 기기에서는 자동으로 로그아웃되었습니다."
+                        + "</p>"
+        );
+    }
+
     public static String passwordReset(String name, String resetUrl) {
         String safeName = escape(name == null || name.isBlank() ? "회원" : name);
         return wrap("비밀번호 재설정",
