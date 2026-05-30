@@ -9,6 +9,12 @@ import com.webauthn4j.converter.AttestedCredentialDataConverter;
 import com.webauthn4j.converter.util.ObjectConverter;
 import com.webauthn4j.credential.CredentialRecord;
 import com.webauthn4j.credential.CredentialRecordImpl;
+import com.webauthn4j.data.attestation.statement.AttestationStatement;
+import com.webauthn4j.data.AuthenticatorTransport;
+import com.webauthn4j.data.extension.authenticator.AuthenticationExtensionsAuthenticatorOutputs;
+import com.webauthn4j.data.extension.authenticator.RegistrationExtensionAuthenticatorOutput;
+import com.webauthn4j.data.extension.client.AuthenticationExtensionsClientOutputs;
+import com.webauthn4j.data.extension.client.RegistrationExtensionClientOutput;
 import com.webauthn4j.data.AuthenticationData;
 import com.webauthn4j.data.AuthenticationParameters;
 import com.webauthn4j.data.AuthenticationRequest;
@@ -218,16 +224,19 @@ public class WebAuthnService {
         // Rebuild the AttestedCredentialData from what we stored at registration,
         // wrap it in a CredentialRecord with the current sign-count.
         AttestedCredentialData attestedCredentialData = attestedCredentialDataConverter.convert(stored.getPublicKeyCose());
+        // Explicit casts so Java's overload resolution picks the right
+        // constructor — webauthn4j has multiple CredentialRecordImpl
+        // constructors and bare nulls are ambiguous to the compiler.
         CredentialRecord credentialRecord = new CredentialRecordImpl(
-                /* attestationStatement */ null,
-                /* uvInitialized       */ null,
-                /* backupEligible      */ null,
-                /* backupState         */ null,
-                /* counter             */ stored.getSignCount(),
+                (AttestationStatement) null,
+                (Boolean) null,                  // uvInitialized
+                (Boolean) null,                  // backupEligible
+                (Boolean) null,                  // backupState
+                stored.getSignCount(),
                 attestedCredentialData,
-                /* authenticatorExtensions */ null,
-                /* clientExtensions    */ null,
-                /* transports          */ null
+                (AuthenticationExtensionsAuthenticatorOutputs<RegistrationExtensionAuthenticatorOutput>) null,
+                (AuthenticationExtensionsClientOutputs<RegistrationExtensionClientOutput>) null,
+                (Set<AuthenticatorTransport>) null
         );
 
         AuthenticationRequest authenticationRequest = new AuthenticationRequest(
