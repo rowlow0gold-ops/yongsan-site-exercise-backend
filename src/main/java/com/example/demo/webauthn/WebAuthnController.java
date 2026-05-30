@@ -47,8 +47,12 @@ public class WebAuthnController {
     public ResponseEntity<?> regFinish(@RequestBody RegisterFinishReq req) {
         Long uid = AuthContext.userIdOrNull();
         if (uid == null) return ResponseEntity.status(401).body(Map.of("message", "Login required"));
-        svc.registrationFinish(uid, req.credentialId(), req.attestationObject(), req.clientDataJSON(), req.name());
-        return ResponseEntity.ok(Map.of("ok", true));
+        try {
+            svc.registrationFinish(uid, req.credentialId(), req.attestationObject(), req.clientDataJSON(), req.name());
+            return ResponseEntity.ok(Map.of("ok", true));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(400).body(Map.of("message", e.getMessage()));
+        }
     }
 
     @PostMapping("/login/start")
@@ -65,12 +69,17 @@ public class WebAuthnController {
 
     @PostMapping("/login/finish")
     public ResponseEntity<?> loginFinish(@RequestBody LoginFinishReq req, HttpServletResponse res) {
-        Long uid = svc.loginFinish(
-                req.credentialId(),
-                req.authenticatorData(),
-                req.clientDataJSON(),
-                req.signature(),
-                req.challenge());
+        Long uid;
+        try {
+            uid = svc.loginFinish(
+                    req.credentialId(),
+                    req.authenticatorData(),
+                    req.clientDataJSON(),
+                    req.signature(),
+                    req.challenge());
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(400).body(Map.of("message", e.getMessage()));
+        }
         AppUser u = users.findById(uid).orElseThrow();
         String sid = sessions.create(u.getId());
         String token = jwt.createAccessToken(u.getId(), u.getRole(), sid);

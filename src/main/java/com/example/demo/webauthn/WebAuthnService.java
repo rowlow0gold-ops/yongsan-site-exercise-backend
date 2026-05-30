@@ -147,8 +147,8 @@ public class WebAuthnService {
         try {
             registrationData = webAuthnManager.parse(registrationRequest);
         } catch (Exception e) {
-            log.warn("WebAuthn registration parse failed: {}", e.getMessage());
-            throw new IllegalArgumentException("Invalid registration payload.");
+            log.error("WebAuthn registration parse failed", e);
+            throw new IllegalArgumentException("Invalid registration payload: " + e.getMessage());
         }
 
         // 2) validate — full crypto: attestation chain (if any), client data hash,
@@ -156,8 +156,8 @@ public class WebAuthnService {
         try {
             webAuthnManager.validate(registrationData, registrationParameters);
         } catch (Exception e) {
-            log.warn("WebAuthn registration validation failed: {}", e.getMessage());
-            throw new IllegalArgumentException("Registration verification failed.");
+            log.error("WebAuthn registration validation failed (rpId={}, origin={})", rpId, origin, e);
+            throw new IllegalArgumentException("Registration verification failed: " + e.getMessage());
         }
 
         AttestationObject ao = registrationData.getAttestationObject();
