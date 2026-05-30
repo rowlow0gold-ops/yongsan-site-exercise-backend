@@ -622,7 +622,15 @@ public class AuthController {
         if (!rateLimit.tryAcquire("pwreset-ip:" + ip, 5, Duration.ofHours(1))) {
             return ResponseEntity.status(429).body(new Msg("잠시 후 다시 시도해주세요."));
         }
-        if (req != null && req.email != null) {
+        // Bot check on top of rate limit — defends against an attacker who's
+        // rotating IPs to slip past the 5/hour bucket. We still return 200
+        // either way to avoid leaking which step failed.
+        if (req == null || req.cfTurnstileToken == null
+                || !turnstile.verify(req.cfTurnstileToken, ip)) {
+            audit.record(req == null ? null : req.email, "PWRESET_TURNSTILE_FAILED", ip, false, null);
+            return ResponseEntity.ok(new Msg("입력하신 이메일이 등록되어 있다면 재설정 링크를 보내드립니다."));
+        }
+        if (req.email != null) {
             String email = req.email.trim().toLowerCase();
             // 3 / hour / email so a malicious actor can't flood one mailbox.
             if (rateLimit.tryAcquire("pwreset-email:" + email, 3, Duration.ofHours(1))) {
@@ -637,6 +645,9 @@ public class AuthController {
     public static class PwResetRequestReq {
         @Email @NotBlank @Size(max = 254)
         private String email;
+
+        // Cloudflare Turnstile widget token. Required from the SPA.
+        private String cfTurnstileToken;
     }
 
     /**

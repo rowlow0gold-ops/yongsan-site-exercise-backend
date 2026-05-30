@@ -41,7 +41,7 @@ public class EmailVerificationService {
         String url = appBaseUrl.replaceAll("/+$", "") + "/verify?token=" + token;
         email.sendHtml(
                 user.getEmail(),
-                "[용산구 홈페이지] 이메일 인증을 완료해주세요",
+                "[테스트 홈페이지] 이메일 인증을 완료해주세요",
                 EmailTemplates.verification(user.getName(), url)
         );
     }

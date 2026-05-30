@@ -16,7 +16,7 @@ public final class EmailTemplates {
         return wrap("이메일 인증",
                 "<h1 style=\"font-size:20px;margin:0 0 12px;\">안녕하세요, " + safeName + "님</h1>"
                         + "<p style=\"margin:0 0 16px;color:#374151;\">"
-                        + "용산구 홈페이지 회원가입을 진행해주셔서 감사합니다. 아래 버튼을 눌러 이메일 인증을 완료해주세요. "
+                        + "테스트 홈페이지 회원가입을 진행해주셔서 감사합니다. 아래 버튼을 눌러 이메일 인증을 완료해주세요. "
                         + "인증이 완료되어야 회원 기능을 이용하실 수 있습니다."
                         + "</p>"
                         + "<p style=\"margin:24px 0;\">"
@@ -63,7 +63,7 @@ public final class EmailTemplates {
                 + "<table role=\"presentation\" cellspacing=\"0\" cellpadding=\"0\" border=\"0\" width=\"560\" style=\"max-width:560px;background:#fff;border-radius:12px;padding:32px;text-align:left;\">"
                 + body
                 + "<hr style=\"border:none;border-top:1px solid #e5e7eb;margin:24px 0;\">"
-                + "<p style=\"margin:0;font-size:12px;color:#9ca3af;text-align:center;\">용산구 홈페이지 · minhojan-world.site</p>"
+                + "<p style=\"margin:0;font-size:12px;color:#9ca3af;text-align:center;\">테스트 홈페이지 · minhojan-world.site</p>"
                 + "</table></td></tr></table></body></html>";
     }
 

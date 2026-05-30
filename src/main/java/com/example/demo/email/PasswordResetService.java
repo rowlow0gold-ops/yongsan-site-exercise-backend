@@ -31,6 +31,10 @@ import java.util.Optional;
 public class PasswordResetService {
 
     private static final String PREFIX = "pwreset:";
+    /** Reverse index — every reset token issued to a user is also tracked here
+     *  so we can invalidate ALL of them on successful reset (defense against
+     *  attacker who triggered a reset before the legitimate user did). */
+    private static final String USER_TOKENS_PREFIX = "pwreset-user:";
     private static final Duration TTL = Duration.ofHours(1);
     private static final SecureRandom RNG = new SecureRandom();
 
@@ -53,11 +57,15 @@ public class PasswordResetService {
 
         String token = newToken();
         redis.opsForValue().set(PREFIX + token, String.valueOf(u.getId()), TTL);
+        // Track every active token for this user so we can invalidate them
+        // all on successful reset.
+        redis.opsForSet().add(USER_TOKENS_PREFIX + u.getId(), token);
+        redis.expire(USER_TOKENS_PREFIX + u.getId(), TTL);
 
         String url = appBaseUrl.replaceAll("/+$", "") + "/reset-password?token=" + token;
         this.email.sendHtml(
                 u.getEmail(),
-                "[용산구 홈페이지] 비밀번호 재설정",
+                "[테스트 홈페이지] 비밀번호 재설정",
                 EmailTemplates.passwordReset(u.getName(), url)
         );
     }
@@ -82,8 +90,18 @@ public class PasswordResetService {
         u.setEmailVerified(true); // verifying email control implicitly proves ownership
         users.save(u);
 
-        // One-time use
-        redis.delete(PREFIX + token);
+        // One-time use AND invalidate every OTHER outstanding reset token for
+        // this user — protects against the case where an attacker requested a
+        // reset before the legitimate user did. If the legit user resets via
+        // their own newer link, the attacker's older link becomes inert.
+        var allTokens = redis.opsForSet().members(USER_TOKENS_PREFIX + uid);
+        if (allTokens != null) {
+            for (String t : allTokens) {
+                redis.delete(PREFIX + t);
+            }
+        }
+        redis.delete(USER_TOKENS_PREFIX + uid);
+        redis.delete(PREFIX + token); // belt + suspenders if it wasn't in the set
 
         // Kill everything: refresh tokens (DB) + sessions (Redis). Other
         // devices get logged out the moment they hit JwtAuthFilter.
