@@ -4,15 +4,28 @@ import com.example.demo.auth.entity.AppUser;
 import com.example.demo.auth.repository.AppUserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.webauthn4j.WebAuthnManager;
-import com.webauthn4j.data.*;
+import com.webauthn4j.converter.AttestationObjectConverter;
+import com.webauthn4j.converter.AttestedCredentialDataConverter;
+import com.webauthn4j.converter.util.ObjectConverter;
+import com.webauthn4j.credential.CredentialRecord;
+import com.webauthn4j.credential.CredentialRecordImpl;
+import com.webauthn4j.data.AuthenticationData;
+import com.webauthn4j.data.AuthenticationParameters;
+import com.webauthn4j.data.AuthenticationRequest;
+import com.webauthn4j.data.PublicKeyCredentialParameters;
+import com.webauthn4j.data.PublicKeyCredentialType;
+import com.webauthn4j.data.RegistrationData;
+import com.webauthn4j.data.RegistrationParameters;
+import com.webauthn4j.data.RegistrationRequest;
+import com.webauthn4j.data.attestation.AttestationObject;
+import com.webauthn4j.data.attestation.authenticator.AttestedCredentialData;
 import com.webauthn4j.data.attestation.statement.COSEAlgorithmIdentifier;
 import com.webauthn4j.data.client.Origin;
 import com.webauthn4j.data.client.challenge.Challenge;
 import com.webauthn4j.data.client.challenge.DefaultChallenge;
-import com.webauthn4j.data.extension.client.AuthenticationExtensionsClientInputs;
-import com.webauthn4j.data.extension.client.RegistrationExtensionClientInput;
 import com.webauthn4j.server.ServerProperty;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
@@ -23,6 +36,7 @@ import java.time.Instant;
 import java.util.*;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class WebAuthnService {
 
@@ -44,6 +58,9 @@ public class WebAuthnService {
     private static final Duration CHALLENGE_TTL = Duration.ofMinutes(5);
 
     private final WebAuthnManager webAuthnManager = WebAuthnManager.createNonStrictWebAuthnManager();
+    private final ObjectConverter objectConverter = new ObjectConverter();
+    private final AttestationObjectConverter attestationObjectConverter = new AttestationObjectConverter(objectConverter);
+    private final AttestedCredentialDataConverter attestedCredentialDataConverter = new AttestedCredentialDataConverter(objectConverter);
     private final SecureRandom random = new SecureRandom();
     private final Base64.Encoder b64url = Base64.getUrlEncoder().withoutPadding();
     private final Base64.Decoder b64urlDec = Base64.getUrlDecoder();
@@ -57,7 +74,6 @@ public class WebAuthnService {
         random.nextBytes(challenge);
         redis.opsForValue().set(CH_PREFIX + "reg:" + userId, b64url.encodeToString(challenge), CHALLENGE_TTL);
 
-        // List of credentials already registered — browser will exclude them
         List<Map<String, Object>> excludeList = new ArrayList<>();
         for (WebAuthnCredential c : creds.findAllByUserId(userId)) {
             excludeList.add(Map.of(
@@ -66,7 +82,6 @@ public class WebAuthnService {
             ));
         }
 
-        // PublicKeyCredentialCreationOptions, serialized as a plain Map → JSON
         Map<String, Object> opts = new LinkedHashMap<>();
         opts.put("challenge", b64url.encodeToString(challenge));
         opts.put("rp", Map.of("id", rpId, "name", rpName));
@@ -89,30 +104,79 @@ public class WebAuthnService {
         return opts;
     }
 
-    /** Step 2 of enrollment — browser sends back attestation, we verify and persist. */
-    public void registrationFinish(Long userId, String credentialIdB64, String publicKeyCoseB64, String name) {
-        String challenge = redis.opsForValue().getAndDelete(CH_PREFIX + "reg:" + userId);
-        if (challenge == null) throw new IllegalArgumentException("Registration challenge expired or missing.");
+    /**
+     * Step 2 of enrollment — full webauthn4j parse + validate, no more stub.
+     *
+     * Browser sends back the raw attestationObject + clientDataJSON. We:
+     *   1) parse them into a RegistrationData
+     *   2) validate signatures, challenge, origin, rpId via the lib
+     *   3) extract the COSE public key from the attestation and store it
+     *      separately so login-finish can rebuild the CredentialRecord
+     */
+    public void registrationFinish(Long userId,
+                                   String credentialIdB64,
+                                   String attestationObjectB64,
+                                   String clientDataJsonB64,
+                                   String name) {
+        String challengeB64 = redis.opsForValue().getAndDelete(CH_PREFIX + "reg:" + userId);
+        if (challengeB64 == null) throw new IllegalArgumentException("Registration challenge expired or missing.");
 
-        // Note: full attestation verification needs the raw clientDataJSON +
-        // attestationObject from the browser. For demo simplicity we store the
-        // browser-supplied credential id + public key as-is. Production hardening
-        // (TODO Phase A.1): pass attestationObject through webAuthnManager.parse()
-        // and webAuthnManager.validate() with ServerProperty(rpId, origin, challenge, null).
-        byte[] credentialId = b64urlDec.decode(credentialIdB64);
-        byte[] publicKey = b64urlDec.decode(publicKeyCoseB64);
+        byte[] attestationObjectBytes = b64urlDec.decode(attestationObjectB64);
+        byte[] clientDataJson = b64urlDec.decode(clientDataJsonB64);
+
+        // 1) parse — throws if malformed
+        RegistrationRequest registrationRequest = new RegistrationRequest(attestationObjectBytes, clientDataJson);
+        RegistrationParameters registrationParameters = new RegistrationParameters(
+                buildServerProperty(challengeB64),
+                List.of(
+                        new PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.ES256),
+                        new PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, COSEAlgorithmIdentifier.RS256)
+                ),
+                false, // userVerificationRequired — we asked for "preferred"
+                true   // userPresenceRequired
+        );
+
+        RegistrationData registrationData;
+        try {
+            registrationData = webAuthnManager.parse(registrationRequest);
+        } catch (Exception e) {
+            log.warn("WebAuthn registration parse failed: {}", e.getMessage());
+            throw new IllegalArgumentException("Invalid registration payload.");
+        }
+
+        // 2) validate — full crypto: attestation chain (if any), client data hash,
+        //    challenge match, origin match, rpIdHash match
+        try {
+            webAuthnManager.validate(registrationData, registrationParameters);
+        } catch (Exception e) {
+            log.warn("WebAuthn registration validation failed: {}", e.getMessage());
+            throw new IllegalArgumentException("Registration verification failed.");
+        }
+
+        AttestationObject ao = registrationData.getAttestationObject();
+        if (ao == null || ao.getAuthenticatorData().getAttestedCredentialData() == null) {
+            throw new IllegalArgumentException("Attestation missing credential data.");
+        }
+        AttestedCredentialData attestedCredentialData = ao.getAuthenticatorData().getAttestedCredentialData();
+
+        // 3) persist — store the credentialId reported by the authenticator (NOT
+        //    the one the SPA happened to send; the authenticator's is authoritative)
+        //    and the serialized AttestedCredentialData so login-finish can rebuild
+        //    the CredentialRecord verbatim.
+        byte[] credentialId = attestedCredentialData.getCredentialId();
+        byte[] attestedCredentialDataBytes = attestedCredentialDataConverter.convert(attestedCredentialData);
 
         WebAuthnCredential c = WebAuthnCredential.builder()
                 .credentialId(credentialId)
-                .publicKeyCose(publicKey)
+                .publicKeyCose(attestedCredentialDataBytes) // serialized AttestedCredentialData (CBOR)
                 .userId(userId)
+                .signCount(ao.getAuthenticatorData().getSignCount())
                 .name(name != null && !name.isBlank() ? name : "Passkey")
                 .build();
         creds.save(c);
     }
 
-    /** Login start — we don't know who the user is yet, so the browser will
-     *  send back the credentialId, and we look the user up from that. */
+    /** Login start — challenge stored against itself, validated on finish. */
     public Map<String, Object> loginStart() {
         byte[] challenge = new byte[32];
         random.nextBytes(challenge);
@@ -124,29 +188,80 @@ public class WebAuthnService {
         opts.put("rpId", rpId);
         opts.put("userVerification", "preferred");
         opts.put("timeout", 60_000);
-        opts.put("allowCredentials", List.of()); // empty = let the platform offer any registered key
+        opts.put("allowCredentials", List.of());
         return opts;
     }
 
-    /** Login finish — verify the assertion against the stored public key + bump counter.
-     *  Returns the user id on success. */
-    public Long loginFinish(String credentialIdB64, String challengeB64) {
-        // Drain the challenge so it can't be replayed
+    /**
+     * Login finish — full webauthn4j validate. The SPA now sends the complete
+     * assertion (authenticatorData + clientDataJSON + signature). We rebuild
+     * the CredentialRecord from what we stored at registration, then let the
+     * library verify the signature against the public key, the challenge, the
+     * rpId hash, the origin, and the monotonic sign-count.
+     */
+    public Long loginFinish(String credentialIdB64,
+                            String authenticatorDataB64,
+                            String clientDataJsonB64,
+                            String signatureB64,
+                            String challengeB64) {
         String challenge = redis.opsForValue().getAndDelete(CH_PREFIX + "login:" + challengeB64);
         if (challenge == null) throw new IllegalArgumentException("Login challenge expired or missing.");
 
         byte[] credentialId = b64urlDec.decode(credentialIdB64);
-        WebAuthnCredential c = creds.findByCredentialId(credentialId)
+        byte[] authenticatorData = b64urlDec.decode(authenticatorDataB64);
+        byte[] clientDataJson = b64urlDec.decode(clientDataJsonB64);
+        byte[] signature = b64urlDec.decode(signatureB64);
+
+        WebAuthnCredential stored = creds.findByCredentialId(credentialId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown passkey."));
 
-        // Production hardening: verify signature using webAuthnManager.validate() with
-        // the assertion's authenticatorData + clientDataJSON + signature + public key.
-        // Demo path here trusts the browser's credentialId presence.
+        // Rebuild the AttestedCredentialData from what we stored at registration,
+        // wrap it in a CredentialRecord with the current sign-count.
+        AttestedCredentialData attestedCredentialData = attestedCredentialDataConverter.convert(stored.getPublicKeyCose());
+        CredentialRecord credentialRecord = new CredentialRecordImpl(
+                /* attestationStatement */ null,
+                /* uvInitialized       */ null,
+                /* backupEligible      */ null,
+                /* backupState         */ null,
+                /* counter             */ stored.getSignCount(),
+                attestedCredentialData,
+                /* authenticatorExtensions */ null,
+                /* clientExtensions    */ null,
+                /* transports          */ null
+        );
 
-        c.setSignCount(c.getSignCount() + 1);
-        c.setLastUsedAt(Instant.now());
-        creds.save(c);
-        return c.getUserId();
+        AuthenticationRequest authenticationRequest = new AuthenticationRequest(
+                credentialId, authenticatorData, clientDataJson, signature);
+        AuthenticationParameters authenticationParameters = new AuthenticationParameters(
+                buildServerProperty(challengeB64),
+                credentialRecord,
+                /* allowCredentials       */ null,
+                /* userVerificationRequired */ false,
+                /* userPresenceRequired   */ true
+        );
+
+        AuthenticationData authenticationData;
+        try {
+            authenticationData = webAuthnManager.parse(authenticationRequest);
+        } catch (Exception e) {
+            log.warn("WebAuthn auth parse failed: {}", e.getMessage());
+            throw new IllegalArgumentException("Invalid assertion payload.");
+        }
+        try {
+            webAuthnManager.validate(authenticationData, authenticationParameters);
+        } catch (Exception e) {
+            log.warn("WebAuthn auth validation failed: {}", e.getMessage());
+            throw new IllegalArgumentException("Passkey verification failed.");
+        }
+
+        // Monotonically increase the sign-count. webauthn4j already rejects
+        // a decrease (clone-detection), so by the time we get here it's safe
+        // to take whatever the authenticator reported.
+        long newCount = authenticationData.getAuthenticatorData().getSignCount();
+        stored.setSignCount(Math.max(stored.getSignCount(), newCount));
+        stored.setLastUsedAt(Instant.now());
+        creds.save(stored);
+        return stored.getUserId();
     }
 
     public List<WebAuthnCredential> list(Long userId) {
@@ -157,5 +272,10 @@ public class WebAuthnService {
         creds.findById(credId).ifPresent(c -> {
             if (c.getUserId().equals(userId)) creds.delete(c);
         });
+    }
+
+    private ServerProperty buildServerProperty(String challengeB64) {
+        Challenge challenge = new DefaultChallenge(b64urlDec.decode(challengeB64));
+        return new ServerProperty(new Origin(origin), rpId, challenge, null);
     }
 }

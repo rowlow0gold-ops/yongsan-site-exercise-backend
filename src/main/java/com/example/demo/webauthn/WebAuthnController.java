@@ -36,13 +36,18 @@ public class WebAuthnController {
         return ResponseEntity.ok(svc.registrationStart(uid));
     }
 
-    public record RegisterFinishReq(String credentialId, String publicKey, String name) {}
+    // New shape — browser sends the full attestation response so the
+    // backend can do real signature verification (was: just credentialId).
+    public record RegisterFinishReq(String credentialId,
+                                    String attestationObject,
+                                    String clientDataJSON,
+                                    String name) {}
 
     @PostMapping("/register/finish")
     public ResponseEntity<?> regFinish(@RequestBody RegisterFinishReq req) {
         Long uid = AuthContext.userIdOrNull();
         if (uid == null) return ResponseEntity.status(401).body(Map.of("message", "Login required"));
-        svc.registrationFinish(uid, req.credentialId(), req.publicKey(), req.name());
+        svc.registrationFinish(uid, req.credentialId(), req.attestationObject(), req.clientDataJSON(), req.name());
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -51,11 +56,21 @@ public class WebAuthnController {
         return ResponseEntity.ok(svc.loginStart());
     }
 
-    public record LoginFinishReq(String credentialId, String challenge) {}
+    // New shape — browser sends the full assertion response.
+    public record LoginFinishReq(String credentialId,
+                                 String authenticatorData,
+                                 String clientDataJSON,
+                                 String signature,
+                                 String challenge) {}
 
     @PostMapping("/login/finish")
     public ResponseEntity<?> loginFinish(@RequestBody LoginFinishReq req, HttpServletResponse res) {
-        Long uid = svc.loginFinish(req.credentialId(), req.challenge());
+        Long uid = svc.loginFinish(
+                req.credentialId(),
+                req.authenticatorData(),
+                req.clientDataJSON(),
+                req.signature(),
+                req.challenge());
         AppUser u = users.findById(uid).orElseThrow();
         String sid = sessions.create(u.getId());
         String token = jwt.createAccessToken(u.getId(), u.getRole(), sid);
