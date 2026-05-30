@@ -106,12 +106,17 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
         String provider = (authentication instanceof OAuth2AuthenticationToken token)
                 ? token.getAuthorizedClientRegistrationId()
                 : "unknown";
+        // Take attributes via Object first, then toString(). The generic
+        // <T> getAttribute(...) tripped Java's overload resolution on
+        // String.valueOf and matched the char[] overload, which then
+        // ClassCastException'd at runtime.
         String providerUserId;
         if ("google".equals(provider)) {
-            providerUserId = String.valueOf(oAuth2User.getAttribute("sub"));
+            Object sub = oAuth2User.getAttribute("sub");
+            providerUserId = sub == null ? null : sub.toString();
         } else if ("kakao".equals(provider)) {
             Object kid = oAuth2User.getAttribute("id");
-            providerUserId = kid == null ? null : String.valueOf(kid);
+            providerUserId = kid == null ? null : kid.toString();
         } else {
             providerUserId = oAuth2User.getName();
         }
@@ -125,8 +130,21 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
         // 1) Fast path — identity already exists. (provider, providerUserId)
         //    is the only key we trust as stable, so if it matches a row we
         //    sign in that user immediately, no email lookup involved.
-        var existingIdentity = oauthIdentities.findByProviderAndProviderUserId(provider, providerUserId);
+        //
+        //    The whole identity layer is wrapped in try/catch: if the
+        //    oauth_identities table doesn't exist yet (least-priv DB user
+        //    can't CREATE TABLE — superuser has to bootstrap it), we fall
+        //    back to the old email-only flow so logins keep working until
+        //    an admin runs the V5 migration as the DB superuser.
         AppUser user;
+        boolean identityTableUsable = true;
+        java.util.Optional<OAuthIdentity> existingIdentity = java.util.Optional.empty();
+        try {
+            existingIdentity = oauthIdentities.findByProviderAndProviderUserId(provider, providerUserId);
+        } catch (Exception e) {
+            log.warn("oauth_identities lookup failed (table likely not bootstrapped); falling back to email-only OAuth: {}", e.getMessage());
+            identityTableUsable = false;
+        }
         if (existingIdentity.isPresent()) {
             user = users.findById(existingIdentity.get().getUserId())
                     .orElseThrow(() -> new IllegalStateException(
@@ -158,22 +176,28 @@ public class OAuth2SuccessHandler implements AuthenticationSuccessHandler {
                 return users.save(newUser);
             });
 
-            // 3) Reject duplicate-provider hijack. If this AppUser already
-            //    has an identity for the SAME provider but a DIFFERENT
-            //    providerUserId, two distinct provider accounts are trying
-            //    to converge through email — exactly the bug we're fixing.
-            //    Bail out instead of silently merging.
-            var sameProviderIdentities = oauthIdentities.findAllByUserIdAndProvider(user.getId(), provider);
-            if (!sameProviderIdentities.isEmpty()) {
-                log.warn("OAuth hijack guard: user {} already has {} identity for provider {}; refusing new providerUserId {}",
-                        user.getId(), sameProviderIdentities.size(), provider, providerUserId);
-                response.sendRedirect(redirectUri + "?error=email_taken");
-                return;
+            // 3) + 4) Identity-table-dependent steps. Skip when the table
+            //    isn't available — degrades to legacy email-only behavior.
+            if (identityTableUsable) {
+                try {
+                    // 3) Reject duplicate-provider hijack. If this AppUser
+                    //    already has an identity for the SAME provider but a
+                    //    DIFFERENT providerUserId, two distinct provider
+                    //    accounts are trying to converge through email —
+                    //    exactly the bug we're fixing. Bail.
+                    var sameProviderIdentities = oauthIdentities.findAllByUserIdAndProvider(user.getId(), provider);
+                    if (!sameProviderIdentities.isEmpty()) {
+                        log.warn("OAuth hijack guard: user {} already has {} identity for provider {}; refusing new providerUserId {}",
+                                user.getId(), sameProviderIdentities.size(), provider, providerUserId);
+                        response.sendRedirect(redirectUri + "?error=email_taken");
+                        return;
+                    }
+                    // 4) First-time linkage.
+                    oauthIdentities.save(new OAuthIdentity(user.getId(), provider, providerUserId));
+                } catch (Exception e) {
+                    log.warn("oauth_identities write skipped (table not bootstrapped): {}", e.getMessage());
+                }
             }
-
-            // 4) First-time linkage — record the identity so future logins
-            //    take the fast path and skip the email fallback entirely.
-            oauthIdentities.save(new OAuthIdentity(user.getId(), provider, providerUserId));
         }
 
         String sid = sessions.create(user.getId());
